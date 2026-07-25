@@ -194,7 +194,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.5';   // bump on every released version
+const VERSION = '1.6';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -394,6 +394,9 @@ const POWER_LABEL = { turbo:'TURBO!', shield:'SHIELD!', magnet:'MAGNET!', lowgra
 let combo = 1, comboTime = 0;
 let hoops = [];         // aerial rings {x, y, got, ph}
 let nextHoopX = 0;
+let obstacles = [];     // spikes on the line {x, hit} — hop over or crash
+let nextObsX = 0;
+let curZoneKey = null;  // banner shown once per zone entry
 let particles = [];     // explosion / trail particles
 let floaters = [];      // floating praise text
 let lastScoreX = null;  // world x where the player crashed last run
@@ -498,6 +501,34 @@ function spawnHoopsAhead(){
   while (hoops.length && hoops[0].x < player.x - W) hoops.shift();
 }
 
+function spawnObstaclesAhead(){
+  const ahead = player.x + W + 600;
+  while (nextObsX < ahead){
+    const x = nextObsX;
+    // keep spikes away from chasms and their ramp/landing shaping
+    if (!inGap(x) && gapShape(x - 240) === 0 && gapShape(x + 240) === 0){
+      obstacles.push({ x, hit:false });
+    }
+    nextObsX += 1900 + Math.random()*1900;
+  }
+  while (obstacles.length && obstacles[0].x < player.x - W) obstacles.shift();
+}
+
+// --- event zones: an occasional stretch of track is special.
+// storm = gusty side-wind while airborne; night = you only see near the bike.
+const ZONE_SEG = 9000;
+function zoneAt(seg){
+  if (seg < 1) return null;
+  if (hash(seg * 4.77 + 9.1) < 0.55) return null;
+  const a = seg * ZONE_SEG + 1500 + hash(seg * 8.3) * 2000;
+  const len = 1600 + hash(seg * 5.9) * 1200;
+  return { type: hash(seg * 11.3) < 0.5 ? 'storm' : 'night', a, b: a + len };
+}
+function zoneOf(x){
+  const z = zoneAt(Math.floor(x / ZONE_SEG));
+  return (z && x >= z.a && x <= z.b) ? z : null;
+}
+
 function addCombo(){
   combo = Math.min(combo + 1, 9);
   comboTime = 6;
@@ -571,9 +602,12 @@ function startGame(){
   POWER.shield = false; POWER.invuln = 0;
   combo = 1; comboTime = 0;
   hoops = []; nextHoopX = startX + 2200;
+  obstacles = []; nextObsX = startX + 2600;
+  curZoneKey = null;
   spawnDiamondsAhead();
   spawnPowerupsAhead();
   spawnHoopsAhead();
+  spawnObstaclesAhead();
 
   hud.classList.remove('hidden');
   loadScreen.classList.add('hidden');
@@ -676,6 +710,25 @@ function update(dt){
   POWER.lowgrav = Math.max(0, POWER.lowgrav - dt);
   POWER.invuln  = Math.max(0, POWER.invuln  - dt);
   const gravNow = GRAVITY * (POWER.lowgrav > 0 ? 0.55 : 1);
+
+  // event zones
+  const zone = zoneOf(p.x);
+  const zoneKey = zone ? zone.type + zone.a : null;
+  if (zoneKey !== curZoneKey){
+    if (zone) addFloater(zone.type === 'storm' ? 'STORM ZONE!' : 'NIGHT ZONE!',
+                         p.x + 160, p.y - 100, zone.type === 'storm' ? '#8fb4ff' : '#c9b8ff');
+    curZoneKey = zoneKey;
+  }
+  if (zone && zone.type === 'storm'){
+    // gusty side-wind — hits hardest while airborne
+    const wind = Math.sin(performance.now()/900 + p.x*0.002) * 260;
+    p.vx += wind * dt * (p.grounded ? 0.25 : 1);
+    if (Math.random() < 0.5){
+      particles.push({ x:camX + Math.random()*W, y:camY + Math.random()*H*0.85,
+        vx: wind*1.8 + (Math.random()-0.5)*80, vy: 30+Math.random()*50,
+        life:0.5, max:0.5, size:1.8+Math.random()*1.5, color:'#8fb4ff' });
+    }
+  }
 
   for (let s = 0; s < STEPS; s++){
     // gravity
@@ -892,6 +945,24 @@ function update(dt){
     }
   }
 
+  // spikes on the line — hop over them or crash (shield still saves you)
+  spawnObstaclesAhead();
+  if (POWER.invuln <= 0){
+    for (const o of obstacles){
+      if (o.hit) continue;
+      if (Math.abs(o.x - p.x) < 15 && p.y > terrainY(p.x) - 52){
+        o.hit = true;
+        for (let i=0;i<14;i++){
+          const a = Math.random()*6.28, s = 60+Math.random()*180;
+          particles.push({ x:o.x, y:terrainY(o.x)-12, vx:Math.cos(a)*s, vy:Math.sin(a)*s-40,
+            life:0.5, max:0.5, size:2+Math.random()*2, color:'#ff3b5c' });
+        }
+        if (POWER.shield){ shieldRescue(); }
+        else { gameOver(); return; }
+      }
+    }
+  }
+
   // camera follow (smooth)
   const tx = p.x - W*0.32;
   const ty = p.y - H*0.52;
@@ -951,6 +1022,7 @@ function draw(){
   }
 
   drawTerrain();
+  drawObstacles();
   drawDiamonds();
   drawPowerups();
   drawHoops();
@@ -963,6 +1035,51 @@ function draw(){
   drawFloaters();
 
   ctx.restore();
+
+  drawZoneFx();
+}
+
+function drawObstacles(){
+  const t = performance.now()/1000;
+  for (const o of obstacles){
+    if (o.hit) continue;
+    const sx = o.x - camX;
+    if (sx < -30 || sx > W+30) continue;
+    const sy = terrainY(o.x) - camY;
+    const pulse = 0.75 + 0.25*Math.sin(t*6 + o.x);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(terrainSlope(o.x));
+    ctx.shadowBlur = 14; ctx.shadowColor = '#ff3b5c';
+    ctx.fillStyle = '#ff3b5c'; ctx.globalAlpha = pulse;
+    ctx.beginPath(); ctx.moveTo(-9,0); ctx.lineTo(0,-26); ctx.lineTo(9,0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.globalAlpha = pulse*0.9;
+    ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(0,-14); ctx.lineTo(4,0); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawZoneFx(){
+  if (state !== State.PLAYING && state !== State.OVER) return;
+  const zone = zoneOf(player.x);
+  if (!zone) return;
+  if (zone.type === 'night'){
+    // darkness closes in — only the area around the bike stays lit
+    const sx = player.x - camX, sy = player.y - camY;
+    const g = ctx.createRadialGradient(sx, sy, 90, sx, sy, 400);
+    g.addColorStop(0, 'rgba(3,1,12,0)');
+    g.addColorStop(1, 'rgba(3,1,12,0.93)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    // storm — cold tint and the odd lightning flash
+    ctx.fillStyle = 'rgba(40,60,120,0.12)';
+    ctx.fillRect(0, 0, W, H);
+    if (Math.random() < 0.02){
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
 }
 
 function drawBackdrop(){
