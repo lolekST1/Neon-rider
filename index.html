@@ -226,7 +226,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.8';   // bump on every released version
+const VERSION = '1.9';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -395,6 +395,7 @@ let state = State.LOADING;
 const player = {
   x: 0, y: 0, vx: 0, vy: 0,
   angle: 0, va: 0,    // orientation + angular velocity (rad/s)
+  wheelAng: 0,        // visual wheel rotation, driven by road speed
   grounded: true,
   spin: 0,            // cumulative rotation while airborne (for flip counting)
   airTime: 0,
@@ -1041,6 +1042,9 @@ function update(dt){
   // distance / score
   distance = Math.max(distance, (p.x - startX) / 40);
 
+  // wheels spin with road speed (they keep turning in the air, slowly bleeding off)
+  p.wheelAng += (Math.hypot(p.vx, p.vy) / WHEEL_R) * dt * (p.grounded ? 1 : 0.55);
+
   // ghost recording + playback clock
   ghostT += dt; sampleAcc += dt;
   if (sampleAcc >= 0.06 && runSamples.length < 9000){
@@ -1488,11 +1492,27 @@ function drawGhost(){
   if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) return;
   ctx.save();
   ctx.translate(sx, sy); ctx.rotate(ga);
-  ctx.globalAlpha = 0.25;
-  ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 2;
-  for (const wx of [-11, 11]){ ctx.beginPath(); ctx.arc(wx, 8, 6.4, 0, 6.283); ctx.stroke(); }
-  ctx.beginPath();
-  ctx.moveTo(-15,6); ctx.lineTo(-9,-4); ctx.lineTo(6,-7); ctx.lineTo(15,0); ctx.lineTo(15,6);
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff';
+  ctx.lineWidth = 1.6; ctx.lineJoin = 'round';
+  for (const wx of [-11, 11]){ ctx.beginPath(); ctx.arc(wx, 8, WHEEL_R, 0, 6.283); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(8.5,-4); ctx.lineTo(11,8); ctx.stroke();       // forks
+  ctx.beginPath(); ctx.moveTo(-3,4); ctx.lineTo(-11,8); ctx.stroke();        // swingarm
+  ctx.beginPath();                                                           // bodywork
+  ctx.moveTo(-16,-5.5); ctx.lineTo(-12.5,-7.2);
+  ctx.quadraticCurveTo(-8,-7.6,-5.5,-5.6);
+  ctx.quadraticCurveTo(-1,-9.2,3,-9.6);
+  ctx.lineTo(7.5,-8.4);
+  ctx.quadraticCurveTo(12,-7,14.5,-2.2);
+  ctx.lineTo(14,1.2);
+  ctx.quadraticCurveTo(10,2.6,6.5,3.4);
+  ctx.lineTo(-2,3.2);
+  ctx.quadraticCurveTo(-8,1.6,-12,-1.4);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(4.4,-14.4,3.5,0,6.283); ctx.fill();               // helmet
+  ctx.beginPath();                                                           // torso
+  ctx.moveTo(-6.2,-7.4); ctx.quadraticCurveTo(-3.6,-13.4,2.6,-14.2);
+  ctx.lineTo(4.2,-11.6); ctx.quadraticCurveTo(-1,-10.6,-3.4,-6.2);
   ctx.closePath(); ctx.fill();
   ctx.restore();
 }
@@ -1513,28 +1533,170 @@ function drawVehicle(){
     ctx.restore();
   }
   ctx.rotate(p.angle);
-  ctx.shadowBlur = 20; ctx.shadowColor = vc;
+  drawBike(vc, p.wheelAng);
+  ctx.restore();
+}
 
-  // wheels
-  ctx.fillStyle = '#120a1e';
-  ctx.strokeStyle = vc; ctx.lineWidth = 2.4;
-  for (const wx of [-11, 11]){
-    ctx.beginPath(); ctx.arc(wx, 8, 6.4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-  }
-  // body
+// A sportbike in side view, facing right. Wheel positions match the physics
+// bodies exactly (WHEELS / WHEEL_R) so what you see is what collides.
+function drawBike(vc, spin){
+  const dark = '#160c26', mid = '#2b1a44';
+
+  ctx.save();
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.shadowBlur = 16; ctx.shadowColor = vc;
+
+  // --- rear suspension + swingarm (behind everything)
+  ctx.strokeStyle = mid; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-3, 4); ctx.lineTo(-11, 8); ctx.stroke();
+  ctx.strokeStyle = vc; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(-3.5, 1); ctx.lineTo(-6.5, 5.5); ctx.stroke();  // shock
+
+  // --- front forks, raked forward like a real sportbike
+  ctx.strokeStyle = mid; ctx.lineWidth = 3.2;
+  ctx.beginPath(); ctx.moveTo(8.5, -4); ctx.lineTo(11, 8); ctx.stroke();
+  ctx.strokeStyle = vc; ctx.lineWidth = 1.3;
+  ctx.beginPath(); ctx.moveTo(9.2, -1.5); ctx.lineTo(10.8, 6); ctx.stroke();
+
+  // --- exhaust can, tucked under the tail
+  ctx.fillStyle = mid;
+  ctx.beginPath();
+  ctx.moveTo(-6, 2.5); ctx.lineTo(-13.5, 3.6); ctx.lineTo(-13.5, 6.2);
+  ctx.lineTo(-6, 5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = vc; ctx.globalAlpha = 0.55;
+  ctx.fillRect(-13.6, 3.6, 1.6, 2.6);
+  ctx.globalAlpha = 1;
+
+  // --- engine block between the wheels
+  ctx.fillStyle = dark;
+  ctx.beginPath();
+  ctx.moveTo(-4, 0); ctx.lineTo(4, 0); ctx.lineTo(5.5, 5); ctx.lineTo(-3, 5.5);
+  ctx.closePath(); ctx.fill();
+
+  // --- wheels (physics-accurate)
+  drawWheel(-11, 8, WHEEL_R, vc, spin);
+  drawWheel( 11, 8, WHEEL_R, vc, spin);
+
+  // --- main bodywork: long, low and wedge-shaped — tail kicked up at the
+  // back, fairing dropping to a pointed nose ahead of the front axle
+  ctx.shadowBlur = 18; ctx.shadowColor = vc;
   ctx.fillStyle = vc;
   ctx.beginPath();
-  ctx.moveTo(-15, 6);
-  ctx.lineTo(-9, -4);
-  ctx.lineTo(6, -7);
-  ctx.lineTo(15, 0);
-  ctx.lineTo(15, 6);
+  ctx.moveTo(-14.6, -7.4);          // tail tip
+  ctx.lineTo(-11.4, -8.6);          // tail top edge
+  ctx.lineTo(-8.2, -5.4);           // drop to the seat
+  ctx.quadraticCurveTo(-4.6, -6.4, -0.6, -6.2);  // tank
+  ctx.quadraticCurveTo(5, -5.8, 8.6, -4.2);      // cowl shoulder
+  ctx.quadraticCurveTo(13.2, -2.6, 15.8, 0.8);   // pointed nose
+  ctx.lineTo(14.2, 2.8);            // nose underside
+  ctx.quadraticCurveTo(9.4, 3.8, 5, 4.1);        // lower fairing
+  ctx.lineTo(-2.4, 3.7);            // belly pan
+  ctx.quadraticCurveTo(-7.6, 2.2, -10.4, -1.6);  // tail underside
+  ctx.lineTo(-12.6, -4.4);          // tail unit rear face
   ctx.closePath();
   ctx.fill();
-  // rider
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath(); ctx.arc(1, -12, 3.4, 0, Math.PI*2); ctx.fill();
-  ctx.fillRect(-3, -11, 8, 6);
+
+  // darker vent panel along the fairing flank
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = dark; ctx.globalAlpha = 0.45;
+  ctx.beginPath();
+  ctx.moveTo(6.4, -3.4); ctx.quadraticCurveTo(11, -1.8, 13.6, 0.6);
+  ctx.lineTo(10.4, 1.6); ctx.quadraticCurveTo(8.2, -0.6, 5.6, -2.2);
+  ctx.closePath(); ctx.fill();
+  // seat pad
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(-11.4, -8.2); ctx.lineTo(-8.4, -5.5); ctx.lineTo(-5.6, -5.9);
+  ctx.lineTo(-9.2, -8.4); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // windscreen over the cowl
+  ctx.fillStyle = 'rgba(190,230,255,0.32)';
+  ctx.beginPath();
+  ctx.moveTo(8, -4.6); ctx.quadraticCurveTo(11, -5.2, 12.8, -2.6);
+  ctx.lineTo(11, -2); ctx.quadraticCurveTo(9.6, -3.6, 7.6, -3.9);
+  ctx.closePath(); ctx.fill();
+
+  // headlight in the nose
+  ctx.fillStyle = '#fff8d8';
+  ctx.shadowBlur = 12; ctx.shadowColor = '#fff3b0';
+  ctx.beginPath(); ctx.ellipse(13.8, 0.4, 1.8, 1.3, -0.5, 0, 6.283); ctx.fill();
+  // tail light
+  ctx.fillStyle = '#ff4066'; ctx.shadowColor = '#ff4066'; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.ellipse(-13.4, -7.4, 1.1, 0.9, 0.3, 0, 6.283); ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // clip-on bars
+  ctx.strokeStyle = mid; ctx.lineWidth = 1.8;
+  ctx.beginPath(); ctx.moveTo(7.2, -4.4); ctx.lineTo(10.2, -3.2); ctx.stroke();
+
+  // --- rider tucked over the tank, in a lighter suit so the pose reads
+  const suit = '#3a2760';
+  ctx.fillStyle = suit;
+  // boot + shin tucked behind the fairing
+  ctx.beginPath();
+  ctx.moveTo(-5.6, -5.6); ctx.lineTo(-1.4, -3); ctx.lineTo(-2.2, 1.6);
+  ctx.lineTo(-5, 1.4); ctx.lineTo(-5.4, -2.4); ctx.closePath(); ctx.fill();
+  // thigh rising to the hip
+  ctx.beginPath();
+  ctx.moveTo(-8.6, -6.2); ctx.lineTo(-2.6, -4.2); ctx.lineTo(-2.2, -7.2);
+  ctx.lineTo(-8.2, -8.6); ctx.closePath(); ctx.fill();
+  // arched back, shoulders down over the tank
+  ctx.beginPath();
+  ctx.moveTo(-9.2, -8.4);
+  ctx.quadraticCurveTo(-6.4, -14.2, 0.6, -14.6);
+  ctx.quadraticCurveTo(3.4, -14.4, 4.4, -12.6);
+  ctx.lineTo(1.6, -10.4);
+  ctx.quadraticCurveTo(-3.4, -10.2, -6.4, -6.6);
+  ctx.closePath(); ctx.fill();
+  // highlight along the spine
+  ctx.strokeStyle = hexA(vc, 0.55); ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(-8.6, -8.8); ctx.quadraticCurveTo(-5.6, -13.6, 0.8, -14.2);
+  ctx.stroke();
+  // arm down to the clip-on
+  ctx.strokeStyle = suit; ctx.lineWidth = 2.8; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(1.6, -12.6); ctx.lineTo(8, -4.4); ctx.stroke();
+  // helmet
+  ctx.fillStyle = '#f2f0ff';
+  ctx.shadowBlur = 10; ctx.shadowColor = '#ffffff';
+  ctx.beginPath(); ctx.arc(2.8, -14.4, 3.4, 0, 6.283); ctx.fill();
+  ctx.shadowBlur = 0;
+  // visor sweeping forward
+  ctx.fillStyle = vc;
+  ctx.beginPath();
+  ctx.moveTo(3.6, -16.2); ctx.quadraticCurveTo(6.2, -15.1, 5.9, -13.1);
+  ctx.quadraticCurveTo(4.8, -13.5, 3.6, -13.4); ctx.closePath(); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawWheel(cx, cy, r, vc, spin){
+  ctx.save();
+  // tyre
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.283);
+  ctx.fillStyle = '#0d0716'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#38264f'; ctx.stroke();
+  // rim
+  ctx.beginPath(); ctx.arc(cx, cy, r*0.6, 0, 6.283);
+  ctx.strokeStyle = vc; ctx.lineWidth = 1.5;
+  ctx.shadowBlur = 8; ctx.shadowColor = vc; ctx.stroke();
+  ctx.shadowBlur = 0;
+  // three-spoke rim, turning with road speed
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(spin);
+  ctx.strokeStyle = vc; ctx.lineWidth = 1.2; ctx.globalAlpha = 0.9;
+  for (let i = 0; i < 3; i++){
+    const a = i * (Math.PI / 1.5);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a)*r*0.58, Math.sin(a)*r*0.58);
+    ctx.stroke();
+  }
+  ctx.restore();
+  // hub
+  ctx.beginPath(); ctx.arc(cx, cy, 1.4, 0, 6.283);
+  ctx.fillStyle = vc; ctx.fill();
   ctx.restore();
 }
 
