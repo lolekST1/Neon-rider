@@ -505,8 +505,9 @@ function update(dt){
     p.vy += GRAVITY * dt;
     p.airTime += dt;
     if (holding){
-      p.angle += SPIN_RATE * dt;
-      p.spin  += SPIN_RATE * dt;
+      // backflip — rotate backwards (nose lifts up and over the rear wheel)
+      p.angle -= SPIN_RATE * dt;
+      p.spin  -= SPIN_RATE * dt;
     }
   }
 
