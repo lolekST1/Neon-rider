@@ -336,8 +336,8 @@ const GRAVITY = 1750;
 const ACCEL = 620;           // forward accel while the button is held (on the ground)
 const FRICTION = 560;        // deceleration with no input — the bike coasts to a full stop
 const MAX_SPEED = 620;       // top speed
-const SPIN_RATE = 6.2;       // rad/s while holding in air
-const LAND_TOLERANCE = 0.72; // radians (~41°) allowed mismatch on landing
+const SPIN_RATE = 5.2;       // rad/s while holding in air (backflip speed)
+const LAND_TOLERANCE = 0.9;  // radians (~51°) allowed mismatch on landing
 
 /* ---------------------------------------------------------------- helpers */
 function normAngle(a){ while(a > Math.PI) a -= Math.PI*2; while(a < -Math.PI) a += Math.PI*2; return a; }
