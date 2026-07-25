@@ -187,7 +187,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.1';   // bump on every released version
+const VERSION = '1.2';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -233,9 +233,9 @@ const BASE_Y = 0;                          // terrain oscillates around world y 
 function terrainY(x){
   // Difficulty ramps amplitude very gently with distance.
   const diff = 1 + Math.min(x / 9000, 1.1);
-  const big   = (smoothNoise(x / 520) - 0.5) * 300 * diff;   // rolling hills
-  const mid   = (smoothNoise(x / 190 + 40) - 0.5) * 130 * diff;
-  const small = (smoothNoise(x / 70 + 90) - 0.5) * 42;
+  const big   = (smoothNoise(x / 520) - 0.5) * 330 * diff;   // rolling hills
+  const mid   = (smoothNoise(x / 190 + 40) - 0.5) * 150 * diff;
+  const small = (smoothNoise(x / 95 + 90) - 0.5) * 30;
   const wave  = Math.sin(x / 240) * 46;
   return BASE_Y + big + mid + small + wave;
 }
@@ -322,9 +322,11 @@ let state = State.LOADING;
 
 const player = {
   x: 0, y: 0, vx: 0, vy: 0,
-  angle: 0, grounded: true,
+  angle: 0, va: 0,    // orientation + angular velocity (rad/s)
+  grounded: true,
   spin: 0,            // cumulative rotation while airborne (for flip counting)
   airTime: 0,
+  jumpPending: false,
   size: 16,
 };
 
@@ -344,18 +346,53 @@ let bestGems = Number(localStorage.getItem('slider_gems') || 0);
 
 const PRAISE = ['smooth!','great!','aced!','WOW!'];
 
-// physics constants
-const GRAVITY = 1750;
-const ACCEL = 620;           // forward accel while the button is held (on the ground)
-const FRICTION = 560;        // deceleration with no input — the bike coasts to a full stop
-const MAX_SPEED = 620;       // top speed
-const SPIN_RATE = 5.2;       // rad/s while holding in air (backflip speed)
-// Landing only fails when the bike is past ~90° from the slope — i.e. it comes
-// down on its roof / the rider instead of the wheels. Anything wheels-first is safe.
-const LAND_TOLERANCE = 1.5;  // radians (~86°)
+// --- physics: a small 2D rigid body (two wheels + chassis) riding the line.
+// This model IS the game: throttle to build speed, ballistic launches off
+// crests, backflip torque in the air, and wheels-first landings that pivot
+// smoothly onto both wheels instead of snapping.
+const GRAVITY = 1200;
+const ENGINE_F = 1700;        // throttle force while holding (on the ground)
+const BRAKE_F = 2600;         // braking when released — the bike parks, even on hills
+const MAX_DRIVE_SPEED = 780;  // throttle stops pushing past this
+const MAX_SPEED = 1200;       // hard safety cap
+const SPIN_RATE = 8.0;        // target backflip rate in the air (rad/s, backwards)
+const SPIN_EASE = 4;          // gradual ramp: short hops tilt a little, big airs flip
+const AIR_SPIN_DELAY = 0.15;  // holding flips only on real jumps, not bump-hops
+const AIR_DAMP = 2.6;         // releasing mid-air steadies the rotation
+const ALIGN_K = 12;           // released in air: gentle pull toward the landing slope
+const ALIGN_MAX = 18;         // cap on that corrective torque (rad/s^2)
+const MAX_VA = 13;            // rotation speed clamp (rad/s)
+const INV_M = 1;              // 1 / mass
+const INV_I = 1 / 420;        // 1 / moment of inertia
+const SUSPENSION = 0.75;      // fraction of impact absorbed per substep (softens hits)
+const CONTACT_VA_MAX = 2.2;   // max rotation a single substep of contact may inject
+                              // (suspension soaks up kicker hits instead of looping the bike)
+const WHEEL_R = 6.4;
+const WHEELS = [{ox:-11, oy:8}, {ox:11, oy:8}];   // rear, front (local coords)
+// chassis + rider sample points — if any of these touches the line, it's a crash
+const BODY_PTS = [{ox:-13,oy:-2},{ox:-6,oy:-8},{ox:4,oy:-10},{ox:13,oy:-3},{ox:1,oy:-15}];
 
 /* ---------------------------------------------------------------- helpers */
-function normAngle(a){ while(a > Math.PI) a -= Math.PI*2; while(a < -Math.PI) a += Math.PI*2; return a; }
+function landedFeedback(slope){
+  const p = player;
+  const flips = Math.floor(Math.abs(p.spin) / (Math.PI*2) + 0.12);
+  let praise = null;
+  if (flips >= 2) praise = 'WOW!';
+  else if (flips === 1) praise = 'aced!';
+  else if (p.airTime > 0.9) praise = 'great!';
+  else if (p.airTime > 0.45) praise = 'smooth!';
+  if (praise){
+    const bonus = 20 + flips*40 + Math.floor(p.airTime*20);
+    distance += bonus / 6; // small distance bonus for style
+    addFloater(praise, p.x, p.y - 40, '#ffffff');
+  }
+  Sound.land();
+  for (let i=0;i<10;i++){
+    const a = slope + Math.PI + (Math.random()-0.5);
+    particles.push({ x:p.x, y:p.y+p.size*0.6, vx:Math.cos(a)*120, vy:Math.sin(a)*120-40,
+      life:0.4, max:0.4, size:2+Math.random()*2, color:palette.line });
+  }
+}
 
 function spawnDiamondsAhead(){
   // Keep a rolling set of diamonds ahead of the player.
@@ -409,9 +446,10 @@ function startGame(){
   startX = 400;
   player.x = startX;
   player.y = terrainY(startX) - player.size;
-  player.vx = 0; player.vy = 0;
+  player.vx = 0; player.vy = 0; player.va = 0;
   player.angle = terrainSlope(startX);
   player.grounded = true; player.spin = 0; player.airTime = 0;
+  player.jumpPending = false;
   camX = player.x - W*0.32;
   camY = player.y - H*0.5;
   spawnDiamondsAhead();
@@ -500,86 +538,127 @@ function update(dt){
 
   const p = player;
 
-  if (p.grounded){
-    // Ground drive is entirely player-driven: the bike accelerates only while
-    // the button is held, and brakes to a full stop when released. It never
-    // moves on its own.
-    let speed = Math.hypot(p.vx, p.vy);
-    if (holding){
-      // hold to accelerate; a downhill adds extra push, an uphill never stalls
-      speed += (ACCEL + Math.max(0, GRAVITY * Math.sin(p.angle)) * 0.5) * dt;
-    } else {
-      speed -= FRICTION * dt;
-    }
-    if (speed < 0) speed = 0;
-    if (speed > MAX_SPEED) speed = MAX_SPEED;
-    p.vx = Math.cos(p.angle) * speed;
-    p.vy = Math.sin(p.angle) * speed;
-  } else {
-    // Airborne: gravity plus button-driven flips.
-    p.vy += GRAVITY * dt;
-    p.airTime += dt;
-    if (holding){
-      // backflip — rotate backwards (nose lifts up and over the rear wheel)
-      p.angle -= SPIN_RATE * dt;
-      p.spin  -= SPIN_RATE * dt;
-    }
-  }
+  /* --- rigid-body substeps: two wheels + chassis riding the neon line ---
+     Each wheel collides with the track independently. A rear-wheel landing
+     receives an impulse at the contact point, which pivots the chassis
+     smoothly onto the front wheel — no angle snapping anywhere. */
+  const STEPS = 6;
+  const h = dt / STEPS;
 
-  // integrate
-  p.x += p.vx * dt;
-  p.y += p.vy * dt;
+  for (let s = 0; s < STEPS; s++){
+    // gravity
+    p.vy += GRAVITY * h;
 
-  // ground interaction
-  const gy = terrainY(p.x);
-  const groundTop = gy - p.size;      // wheels sit slightly above the curve
-
-  if (p.y >= groundTop){
-    const slope = terrainSlope(p.x);
+    // air control: hold = backflip torque (on real jumps), release = recover.
+    // Releasing steadies the spin AND gently pulls the bike toward the slope
+    // it is falling onto — you can save an early bail-out, never a late flip.
     if (!p.grounded){
-      // ---- landing ----
-      const diff = Math.abs(normAngle(p.angle - slope));
-      if (diff > LAND_TOLERANCE){
-        // bad angle / upside-down / roof hit => crash
-        gameOver();
-        return;
+      p.airTime += h;
+      if (holding && p.airTime > AIR_SPIN_DELAY){
+        p.va += ((-SPIN_RATE) - p.va) * Math.min(1, SPIN_EASE * h);
+      } else {
+        p.va -= p.va * Math.min(1, AIR_DAMP * h);
+        let d = terrainSlope(p.x + p.vx * 0.15) - p.angle;
+        while (d >  Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        p.va += Math.max(-ALIGN_MAX, Math.min(ALIGN_MAX, d * ALIGN_K)) * h;
       }
-      // successful landing
-      const flips = Math.floor(Math.abs(p.spin) / (Math.PI*2) + 0.15);
-      let praise = null;
-      if (flips >= 2) praise = 'WOW!';
-      else if (flips === 1) praise = 'aced!';
-      else if (p.airTime > 0.75) praise = 'great!';
-      else if (p.airTime > 0.35) praise = 'smooth!';
-      if (praise){
-        const bonus = 20 + flips*40 + Math.floor(p.airTime*20);
-        distance += bonus / 6; // small distance bonus for style
-        addFloater(praise, p.x, p.y - 40, '#ffffff');
-      }
-      Sound.land();
-      // land trail burst
-      for (let i=0;i<10;i++){
-        const a = slope + Math.PI + (Math.random()-0.5);
-        particles.push({ x:p.x, y:p.y+p.size*0.6, vx:Math.cos(a)*120, vy:Math.sin(a)*120-40,
-          life:0.4, max:0.4, size:2+Math.random()*2, color:palette.line });
-      }
-      p.spin = 0; p.airTime = 0;
+      p.spin += p.va * h;
     }
-    // stick to the ground and align to the slope. Keep only the speed along
-    // the slope (project out the into-surface component) so a landing preserves
-    // forward momentum without a vertical kick. Drive/friction apply next frame.
-    p.y = groundTop;
-    p.grounded = true;
-    p.angle = slope;
-    let speed = p.vx * Math.cos(slope) + p.vy * Math.sin(slope);
-    if (speed < 0) speed = 0;
-    if (speed > MAX_SPEED) speed = MAX_SPEED;
-    p.vx = Math.cos(slope) * speed;
-    p.vy = Math.sin(slope) * speed;
-  } else {
-    // airborne
-    if (p.grounded){ p.grounded = false; p.airTime = 0; p.spin = 0; Sound.jump(); }
+
+    // integrate
+    p.x += p.vx * h;
+    p.y += p.vy * h;
+    p.angle += p.va * h;
+
+    // wheel contacts — velocity impulses + soft positional correction.
+    // Rotation injected by contacts is capped per substep, so a kicker lofts
+    // the nose moderately instead of looping the whole bike.
+    let contacts = 0, slopeSum = 0, rearC = false, frontC = false, vaAcc = 0;
+    for (let iter = 0; iter < 2; iter++){
+      contacts = 0; slopeSum = 0; rearC = false; frontC = false;
+      const ca = Math.cos(p.angle), sa = Math.sin(p.angle);
+      for (let wi = 0; wi < 2; wi++){
+        const w = WHEELS[wi];
+        const wx = p.x + w.ox*ca - w.oy*sa;
+        const wy = p.y + w.ox*sa + w.oy*ca;
+        const pen = wy + WHEEL_R - terrainY(wx);
+        if (pen <= 0) continue;
+        contacts++; if (wi === 0) rearC = true; else frontC = true;
+        const sl = terrainSlope(wx); slopeSum += sl;
+        const nx = Math.sin(sl), ny = -Math.cos(sl);   // up, out of the track
+        const rx = wx - p.x, ry = wy - p.y;
+        const rn = rx*ny - ry*nx;
+        const denom = INV_M + rn*rn*INV_I;
+        // absorb the velocity going into the track at this wheel — partial
+        // per substep, so hits are cushioned like suspension travel
+        const vn = (p.vx - (p.va + vaAcc)*ry)*nx + (p.vy + (p.va + vaAcc)*rx)*ny;
+        if (vn < 0){
+          const j = -vn * SUSPENSION / denom;
+          p.vx += j*nx*INV_M; p.vy += j*ny*INV_M; vaAcc += j*rn*INV_I;
+        }
+        // ease the wheel out of the ground (rotating the chassis naturally)
+        const corr = Math.max(pen - 0.3, 0) * 0.45 / denom;
+        p.x += corr*nx*INV_M; p.y += corr*ny*INV_M; p.angle += corr*rn*INV_I;
+      }
+    }
+    p.va += Math.max(-CONTACT_VA_MAX, Math.min(CONTACT_VA_MAX, vaAcc));
+    if (p.va > MAX_VA) p.va = MAX_VA; else if (p.va < -MAX_VA) p.va = -MAX_VA;
+
+    const wasAir = !p.grounded;
+    p.grounded = contacts > 0;
+
+    if (p.grounded){
+      const sl = slopeSum / contacts;
+      const tx = Math.cos(sl), ty = Math.sin(sl);
+      const nx = Math.sin(sl), ny = -Math.cos(sl);
+      let vt = p.vx*tx + p.vy*ty;
+      const vn = p.vx*nx + p.vy*ny;
+      if (holding){
+        // throttle pushes along the track (downhill gravity adds on top)
+        if (vt < MAX_DRIVE_SPEED) vt += ENGINE_F * h;
+      } else {
+        // brakes act like static friction: stop and stay put, even on hills
+        const dec = BRAKE_F * h;
+        if (Math.abs(vt) <= dec) vt = 0; else vt -= Math.sign(vt) * dec;
+      }
+      p.vx = tx*vt + nx*vn;
+      p.vy = ty*vt + ny*vn;
+      // chassis tracks the terrain while riding: damped spring toward the
+      // slope (tyres + suspension), and grounded spin is physically limited —
+      // a bike with a wheel on the ground cannot wind up into a loop
+      p.va -= p.va * Math.min(1, (rearC && frontC ? 12 : 6) * h);
+      let dAng = sl - p.angle;
+      while (dAng >  Math.PI) dAng -= Math.PI * 2;
+      while (dAng < -Math.PI) dAng += Math.PI * 2;
+      p.va += Math.max(-22, Math.min(22, dAng * 14)) * h;
+      if (p.va > 6) p.va = 6; else if (p.va < -6) p.va = -6;
+
+      if (wasAir && p.airTime > 0.12){
+        landedFeedback(sl);
+        p.spin = 0; p.airTime = 0;
+      }
+    } else if (!wasAir){
+      // took off
+      p.spin = 0; p.airTime = 0; p.jumpPending = true;
+    }
+
+    // crash: the chassis or the rider touches the line — wheels never crash
+    const cca = Math.cos(p.angle), csa = Math.sin(p.angle);
+    for (const b of BODY_PTS){
+      const bx = p.x + b.ox*cca - b.oy*csa;
+      const by = p.y + b.ox*csa + b.oy*cca;
+      if (by > terrainY(bx) + 1.5){ gameOver(); return; }
+    }
   }
+
+  // real jumps get a sound; skimming a bump stays silent
+  if (p.jumpPending && !p.grounded && p.airTime > 0.12){ Sound.jump(); p.jumpPending = false; }
+  if (p.grounded) p.jumpPending = false;
+
+  // hard safety cap
+  const spd = Math.hypot(p.vx, p.vy);
+  if (spd > MAX_SPEED){ p.vx *= MAX_SPEED/spd; p.vy *= MAX_SPEED/spd; }
 
   // engine trail while riding (only when actually moving)
   if (p.grounded && Math.hypot(p.vx, p.vy) > 80 && Math.random() < 0.6){

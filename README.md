@@ -19,7 +19,10 @@ Open `index.html` in any modern browser. No build step, no dependencies.
 ## Features
 
 - Procedural terrain from layered smooth value-noise (endless, difficulty ramps with distance).
-- One-button physics: momentum, gravity, ramp launches, air rotation & landing-angle detection.
+- Rigid-body physics: two wheels colliding with the track independently, suspension-softened
+  impacts, ballistic launches off crests, backflip torque in the air, and landings that pivot
+  from the rear wheel onto the front — no snapping. A crash only happens when the chassis or
+  the rider touches the line; wheels-first is always safe.
 - Neon / cyberpunk styling with glow, a parallax grid backdrop and drifting geometric shapes.
 - Track, vehicle and title colours cycle per level.
 - Collectible diamonds, distance score, floating praise (`smooth!`, `great!`, `aced!`, `WOW!`).
