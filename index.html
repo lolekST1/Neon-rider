@@ -194,7 +194,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.4';   // bump on every released version
+const VERSION = '1.5';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -389,6 +389,11 @@ const POWER_STYLE = {
   lowgrav: { color:'#b06bff' },
 };
 const POWER_LABEL = { turbo:'TURBO!', shield:'SHIELD!', magnet:'MAGNET!', lowgrav:'LOW-G!' };
+// combo: every trick (praised landing, hoop) bumps the multiplier; it decays
+// after a few seconds without a trick and all style bonuses are multiplied
+let combo = 1, comboTime = 0;
+let hoops = [];         // aerial rings {x, y, got, ph}
+let nextHoopX = 0;
 let particles = [];     // explosion / trail particles
 let floaters = [];      // floating praise text
 let lastScoreX = null;  // world x where the player crashed last run
@@ -435,9 +440,10 @@ function landedFeedback(slope){
   else if (p.airTime > 0.9) praise = 'great!';
   else if (p.airTime > 0.45) praise = 'smooth!';
   if (praise){
-    const bonus = 20 + flips*40 + Math.floor(p.airTime*20);
-    distance += bonus / 6; // small distance bonus for style
-    addFloater(praise, p.x, p.y - 40, '#ffffff');
+    const bonus = (20 + flips*40 + Math.floor(p.airTime*20)) * combo;
+    distance += bonus / 6; // style bonus, scaled by the combo multiplier
+    addFloater(combo > 1 ? praise + ' x' + combo : praise, p.x, p.y - 40, '#ffffff');
+    addCombo();
   }
   Sound.land();
   for (let i=0;i<10;i++){
@@ -480,6 +486,21 @@ function spawnPowerupsAhead(){
     nextPowerX += 2400 + Math.random()*2200;
   }
   while (powerups.length && powerups[0].x < player.x - W) powerups.shift();
+}
+
+function spawnHoopsAhead(){
+  const ahead = player.x + W + 600;
+  while (nextHoopX < ahead){
+    hoops.push({ x:nextHoopX, y:terrainY(nextHoopX) - (115 + Math.random()*70),
+                 got:false, ph:Math.random()*6.28 });
+    nextHoopX += 1800 + Math.random()*1900;
+  }
+  while (hoops.length && hoops[0].x < player.x - W) hoops.shift();
+}
+
+function addCombo(){
+  combo = Math.min(combo + 1, 9);
+  comboTime = 6;
 }
 
 function applyPower(type){
@@ -548,8 +569,11 @@ function startGame(){
   nextPowerX = startX + 1600;
   POWER.turbo = 0; POWER.magnet = 0; POWER.lowgrav = 0;
   POWER.shield = false; POWER.invuln = 0;
+  combo = 1; comboTime = 0;
+  hoops = []; nextHoopX = startX + 2200;
   spawnDiamondsAhead();
   spawnPowerupsAhead();
+  spawnHoopsAhead();
 
   hud.classList.remove('hidden');
   loadScreen.classList.add('hidden');
@@ -641,6 +665,10 @@ function update(dt){
      smoothly onto the front wheel — no angle snapping anywhere. */
   const STEPS = 6;
   const h = dt / STEPS;
+
+  // combo decay
+  comboTime = Math.max(0, comboTime - dt);
+  if (comboTime === 0) combo = 1;
 
   // power-up timers
   POWER.turbo   = Math.max(0, POWER.turbo   - dt);
@@ -845,6 +873,25 @@ function update(dt){
     }
   }
 
+  // aerial hoops — fly through the opening for combo points
+  spawnHoopsAhead();
+  for (const hp of hoops){
+    if (hp.got) continue;
+    if (Math.abs(hp.x - p.x) < 16 && Math.abs(hp.y - p.y) < 34){
+      hp.got = true;
+      const pts = 5 * combo;
+      distance += pts;
+      addFloater('HOOP! +' + pts, hp.x, hp.y - 44, '#ffd23d');
+      addCombo();
+      Sound.power();
+      for (let i=0;i<14;i++){
+        const a = Math.random()*6.28, s = 60+Math.random()*180;
+        particles.push({ x:hp.x, y:hp.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.5, max:0.5,
+          size:2+Math.random()*2.5, color:'#ffd23d' });
+      }
+    }
+  }
+
   // camera follow (smooth)
   const tx = p.x - W*0.32;
   const ty = p.y - H*0.52;
@@ -860,6 +907,7 @@ function update(dt){
   hudScore.textContent = Math.floor(distance);
   hudGems.textContent = gems;
   let ph = '';
+  if (combo > 1) ph += `<span style="color:#ffd23d">&#215;${combo}</span>`;
   if (POWER.turbo   > 0) ph += `<span style="color:#ffb14d">&#9889; ${Math.ceil(POWER.turbo)}s</span>`;
   if (POWER.lowgrav > 0) ph += `<span style="color:#c89bff">&#127769; ${Math.ceil(POWER.lowgrav)}s</span>`;
   if (POWER.magnet  > 0) ph += `<span style="color:#ff7fe3">&#129522; ${Math.ceil(POWER.magnet)}s</span>`;
@@ -905,6 +953,7 @@ function draw(){
   drawTerrain();
   drawDiamonds();
   drawPowerups();
+  drawHoops();
   drawLastScore();
   drawParticles();
   if (state === State.PLAYING || (state===State.OVER)) {
@@ -1041,6 +1090,24 @@ function drawPowerups(){
     // icon
     ctx.shadowBlur = 0; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff';
     drawPowerIcon(u.type, cfg.color);
+    ctx.restore();
+  }
+}
+
+function drawHoops(){
+  const t = performance.now()/1000;
+  for (const hp of hoops){
+    if (hp.got) continue;
+    const sx = hp.x - camX, sy = hp.y - camY + Math.sin(t*2 + hp.ph)*3;
+    if (sx < -30 || sx > W+30) continue;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.shadowBlur = 16; ctx.shadowColor = '#ffd23d';
+    ctx.strokeStyle = '#ffd23d'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(0, 0, 8, 32, 0, 0, 6.283); ctx.stroke();
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.ellipse(0, 0, 8, 32, 0, 0, 6.283); ctx.stroke();
     ctx.restore();
   }
 }
