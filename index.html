@@ -226,7 +226,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.7';   // bump on every released version
+const VERSION = '1.8';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -600,11 +600,22 @@ function spawnObstaclesAhead(){
     const x = nextObsX;
     // keep spikes away from chasms and their ramp/landing shaping
     if (!inGap(x) && gapShape(x - 240) === 0 && gapShape(x + 240) === 0){
-      obstacles.push({ x, hit:false });
+      obstacles.push({ x, hit:false, ph: hash(x * 0.77) * OBS_PERIOD });
     }
     nextObsX += 1900 + Math.random()*1900;
   }
   while (obstacles.length && obstacles[0].x < player.x - W) obstacles.shift();
+}
+
+// spikes retract on a cycle: ~2s out, ~1.1s hidden — if you stop short of
+// one, wait for it to sink into the line and ride across
+const OBS_PERIOD = 3.4, OBS_UP = 2.0, OBS_TRANS = 0.3;
+function obsExt(o){
+  const t = (performance.now()/1000 + o.ph) % OBS_PERIOD;
+  if (t < OBS_TRANS) return t / OBS_TRANS;                        // rising
+  if (t < OBS_UP) return 1;                                       // out
+  if (t < OBS_UP + OBS_TRANS) return 1 - (t - OBS_UP)/OBS_TRANS;  // sinking
+  return 0;                                                       // hidden
 }
 
 // --- event zones: an occasional stretch of track is special.
@@ -1107,7 +1118,7 @@ function update(dt){
   if (POWER.invuln <= 0){
     for (const o of obstacles){
       if (o.hit) continue;
-      if (Math.abs(o.x - p.x) < 15 && p.y > terrainY(p.x) - 52){
+      if (obsExt(o) > 0.4 && Math.abs(o.x - p.x) < 15 && p.y > terrainY(p.x) - 52){
         o.hit = true;
         for (let i=0;i<14;i++){
           const a = Math.random()*6.28, s = 60+Math.random()*180;
@@ -1204,15 +1215,23 @@ function drawObstacles(){
     const sx = o.x - camX;
     if (sx < -30 || sx > W+30) continue;
     const sy = terrainY(o.x) - camY;
+    const e = obsExt(o);
     const pulse = 0.75 + 0.25*Math.sin(t*6 + o.x);
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(terrainSlope(o.x));
-    ctx.shadowBlur = 14; ctx.shadowColor = '#ff3b5c';
-    ctx.fillStyle = '#ff3b5c'; ctx.globalAlpha = pulse;
-    ctx.beginPath(); ctx.moveTo(-9,0); ctx.lineTo(0,-26); ctx.lineTo(9,0); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#ffffff'; ctx.globalAlpha = pulse*0.9;
-    ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(0,-14); ctx.lineTo(4,0); ctx.closePath(); ctx.fill();
+    // base marker — always visible so you know where the spike will pop up
+    ctx.shadowBlur = 10; ctx.shadowColor = '#ff3b5c';
+    ctx.fillStyle = '#ff3b5c'; ctx.globalAlpha = 0.5 + 0.3*e;
+    ctx.fillRect(-8, -2, 16, 3);
+    // the spike itself, scaled by its extension
+    if (e > 0.03){
+      ctx.shadowBlur = 14;
+      ctx.globalAlpha = pulse * (0.35 + 0.65*e);
+      ctx.beginPath(); ctx.moveTo(-9,0); ctx.lineTo(0,-26*e); ctx.lineTo(9,0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.globalAlpha = pulse * 0.9 * e;
+      ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(0,-14*e); ctx.lineTo(4,0); ctx.closePath(); ctx.fill();
+    }
     ctx.restore();
   }
 }
