@@ -50,6 +50,12 @@
     text-shadow: 0 0 18px rgba(255,255,255,.35);
   }
 
+  .powers { display:flex; gap:10px; margin-top:6px; min-height:22px;
+    font-weight:800; font-size:15px; color:#fff; justify-content:center; }
+  .powers span { display:inline-flex; align-items:center; gap:4px; padding:2px 9px;
+    border-radius:11px; background:rgba(255,255,255,.09);
+    text-shadow:0 0 8px currentColor; }
+
   .diamonds {
     display: flex; align-items: center; gap: 8px;
     color: #fff; font-weight: 900; font-size: 30px;
@@ -142,6 +148,7 @@
     <div class="title-wrap">
       <div class="title" id="hudTitle">slider</div>
       <div class="score" id="hudScore">0</div>
+      <div class="powers" id="hudPowers"></div>
     </div>
     <div class="diamonds"><span id="hudGems">0</span><span class="gem"></span></div>
   </div>
@@ -187,7 +194,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.3';   // bump on every released version
+const VERSION = '1.4';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -237,11 +244,43 @@ function terrainY(x){
   const mid   = (smoothNoise(x / 190 + 40) - 0.5) * 150 * diff;
   const small = (smoothNoise(x / 95 + 90) - 0.5) * 30;
   const wave  = Math.sin(x / 240) * 46;
-  return BASE_Y + big + mid + small + wave;
+  return BASE_Y + big + mid + small + wave + gapShape(x);
 }
 function terrainSlope(x){
   const d = 3.5;
   return Math.atan2(terrainY(x + d) - terrainY(x - d), 2 * d);
+}
+
+// --- gaps: every so often the line simply breaks. Deterministic from x, so
+// physics and rendering always agree. Fall in and it's game over — jump it.
+// The terrain is shaped around every gap: a kicker ramp rises to the near lip
+// and the landing beyond sits lower, so each gap is clearable at speed.
+const GAP_SEG = 2600;         // average spacing between potential gaps
+function gapAt(seg){
+  if (seg < 1) return null;                        // safe runway after spawn
+  if (hash(seg * 7.13 + 3.7) < 0.55) return null;  // ~45% of segments have one
+  const w = 110 + hash(seg * 3.1 + 1.2) * 140;
+  const c = seg * GAP_SEG + GAP_SEG * 0.5 + (hash(seg * 9.7) - 0.5) * 500;
+  return { c, w };
+}
+function inGap(x){
+  const g = gapAt(Math.floor(x / GAP_SEG));
+  return !!g && Math.abs(x - g.c) < g.w / 2;
+}
+function gapShape(x){
+  const g = gapAt(Math.floor(x / GAP_SEG));
+  if (!g) return 0;
+  const lipL = g.c - g.w/2, lipR = g.c + g.w/2;
+  if (x >= lipL - 300 && x < lipL){
+    const t = (x - (lipL - 300)) / 300;
+    return -55 * t * t;                    // kicker ramp rising to the lip
+  }
+  if (x >= lipL && x <= lipR) return -55;  // keeps the lip edges consistent
+  if (x > lipR && x < lipR + 500){
+    const t = (x - lipR) / 500;
+    return 35 * (1 - t*t*(3 - 2*t));       // lowered landing easing back up
+  }
+  return 0;
 }
 
 /* ---------------------------------------------------------------- audio */
@@ -306,6 +345,7 @@ const Sound = (function(){
     resume,
     jump(){ blip(320, 0.16, 'square', 0.2, 620); },
     gem(){ blip(880, 0.10, 'sine', 0.28, 1320); setTimeout(()=>blip(1320,0.10,'sine',0.2),60); },
+    power(){ blip(520, 0.09, 'square', 0.22, 1040); setTimeout(()=>blip(1040,0.12,'sine',0.2,1560),70); },
     flip(){ blip(520, 0.12, 'square', 0.18, 780); },
     land(){ blip(240, 0.09, 'sine', 0.16, 180); },
     crash(){
@@ -338,6 +378,17 @@ let palette = PALETTES[0];
 let holding = false;
 
 let diamonds = [];      // {x, y, got}
+let powerups = [];      // special pickups {x, y, type, got, ph}
+let nextPowerX = 0;
+// active effects: timers in seconds; shield is held until it saves you once
+const POWER = { turbo:0, magnet:0, lowgrav:0, shield:false, invuln:0 };
+const POWER_STYLE = {
+  turbo:   { color:'#ff9d2e' },
+  shield:  { color:'#35e0ff' },
+  magnet:  { color:'#ff4fd8' },
+  lowgrav: { color:'#b06bff' },
+};
+const POWER_LABEL = { turbo:'TURBO!', shield:'SHIELD!', magnet:'MAGNET!', lowgrav:'LOW-G!' };
 let particles = [];     // explosion / trail particles
 let floaters = [];      // floating praise text
 let lastScoreX = null;  // world x where the player crashed last run
@@ -419,6 +470,45 @@ function spawnDiamondsAhead(){
   while (diamonds.length && diamonds[0].x < player.x - W) diamonds.shift();
 }
 
+function spawnPowerupsAhead(){
+  const ahead = player.x + W + 600;
+  while (nextPowerX < ahead){
+    const types = ['turbo','shield','magnet','lowgrav'];
+    const t = types[Math.floor(Math.random()*types.length)];
+    powerups.push({ x:nextPowerX, y:terrainY(nextPowerX) - (46 + Math.random()*70),
+                    type:t, got:false, ph:Math.random()*6.28 });
+    nextPowerX += 2400 + Math.random()*2200;
+  }
+  while (powerups.length && powerups[0].x < player.x - W) powerups.shift();
+}
+
+function applyPower(type){
+  if (type === 'turbo')        POWER.turbo   = 5.5;
+  else if (type === 'magnet')  POWER.magnet  = 7;
+  else if (type === 'lowgrav') POWER.lowgrav = 5.5;
+  else if (type === 'shield')  POWER.shield  = true;
+}
+
+// the shield spends itself to turn a fatal crash into a wobble-through
+function shieldRescue(){
+  const p = player;
+  POWER.shield = false; POWER.invuln = 1.2;
+  const sl = terrainSlope(p.x);
+  p.angle = sl; p.va = 0;
+  p.y = terrainY(p.x) - 15;
+  let vt = Math.max(p.vx * Math.cos(sl) + p.vy * Math.sin(sl), 260);
+  p.vx = Math.cos(sl) * vt; p.vy = Math.sin(sl) * vt;
+  p.grounded = true; p.spin = 0; p.airTime = 0;
+  shake = 8;
+  addFloater('SHIELD!', p.x, p.y - 46, '#7ff0ff');
+  for (let i=0;i<26;i++){
+    const a = Math.random()*6.28, s = 80 + Math.random()*220;
+    particles.push({ x:p.x, y:p.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s - 40,
+      life:0.6, max:0.6, size:2+Math.random()*3, color:'#7ff0ff' });
+  }
+  Sound.power();
+}
+
 function addFloater(text, x, y, color){
   floaters.push({ text, x, y, life:1.2, color:color||'#fff' });
 }
@@ -454,7 +544,12 @@ function startGame(){
   player.jumpPending = false;
   camX = player.x - W*0.32;
   camY = player.y - H*0.5;
+  powerups = [];
+  nextPowerX = startX + 1600;
+  POWER.turbo = 0; POWER.magnet = 0; POWER.lowgrav = 0;
+  POWER.shield = false; POWER.invuln = 0;
   spawnDiamondsAhead();
+  spawnPowerupsAhead();
 
   hud.classList.remove('hidden');
   loadScreen.classList.add('hidden');
@@ -547,9 +642,16 @@ function update(dt){
   const STEPS = 6;
   const h = dt / STEPS;
 
+  // power-up timers
+  POWER.turbo   = Math.max(0, POWER.turbo   - dt);
+  POWER.magnet  = Math.max(0, POWER.magnet  - dt);
+  POWER.lowgrav = Math.max(0, POWER.lowgrav - dt);
+  POWER.invuln  = Math.max(0, POWER.invuln  - dt);
+  const gravNow = GRAVITY * (POWER.lowgrav > 0 ? 0.55 : 1);
+
   for (let s = 0; s < STEPS; s++){
     // gravity
-    p.vy += GRAVITY * h;
+    p.vy += gravNow * h;
 
     // air control: hold = backflip torque (on real jumps), release = recover.
     // Releasing steadies the spin AND gently pulls the bike toward the slope
@@ -584,6 +686,7 @@ function update(dt){
         const w = WHEELS[wi];
         const wx = p.x + w.ox*ca - w.oy*sa;
         const wy = p.y + w.ox*sa + w.oy*ca;
+        if (inGap(wx)) continue;             // no line to ride over a chasm
         const pen = wy + WHEEL_R - terrainY(wx);
         if (pen <= 0) continue;
         contacts++; if (wi === 0) rearC = true; else frontC = true;
@@ -618,7 +721,9 @@ function update(dt){
       const vn = p.vx*nx + p.vy*ny;
       if (holding){
         // throttle pushes along the track (downhill gravity adds on top)
-        if (vt < MAX_DRIVE_SPEED) vt += ENGINE_F * h;
+        const maxD = POWER.turbo > 0 ? MAX_DRIVE_SPEED * 1.45 : MAX_DRIVE_SPEED;
+        const eng  = POWER.turbo > 0 ? ENGINE_F * 1.7 : ENGINE_F;
+        if (vt < maxD) vt += eng * h;
       } else {
         // released: momentum carries the bike — it rolls out gradually under
         // rolling resistance + drag (and keeps rolling on a downhill). Only
@@ -652,14 +757,23 @@ function update(dt){
       p.spin = 0; p.airTime = 0; p.jumpPending = true;
     }
 
-    // crash: the chassis or the rider touches the line — wheels never crash
-    const cca = Math.cos(p.angle), csa = Math.sin(p.angle);
-    for (const b of BODY_PTS){
-      const bx = p.x + b.ox*cca - b.oy*csa;
-      const by = p.y + b.ox*csa + b.oy*cca;
-      if (by > terrainY(bx) + 1.5){ gameOver(); return; }
+    // crash: the chassis or the rider touches the line — wheels never crash.
+    // A held shield turns one fatal hit into a save instead.
+    if (POWER.invuln <= 0){
+      const cca = Math.cos(p.angle), csa = Math.sin(p.angle);
+      for (const b of BODY_PTS){
+        const bx = p.x + b.ox*cca - b.oy*csa;
+        const by = p.y + b.ox*csa + b.oy*cca;
+        if (!inGap(bx) && by > terrainY(bx) + 1.5){
+          if (POWER.shield){ shieldRescue(); break; }
+          gameOver(); return;
+        }
+      }
     }
   }
+
+  // fell into a chasm
+  if (p.y > 1300){ gameOver(); return; }
 
   // real jumps get a sound; skimming a bump stays silent
   if (p.jumpPending && !p.grounded && p.airTime > 0.12){ Sound.jump(); p.jumpPending = false; }
@@ -675,6 +789,15 @@ function update(dt){
       vx:-40+Math.random()*20, vy:-20-Math.random()*30, life:0.35, max:0.35,
       size:2+Math.random()*2, color:palette.line });
   }
+  // turbo exhaust flame
+  if (POWER.turbo > 0 && p.grounded){
+    for (let i=0;i<2;i++){
+      particles.push({ x:p.x - Math.cos(p.angle)*18, y:p.y - Math.sin(p.angle)*18,
+        vx:-Math.cos(p.angle)*(160+Math.random()*120), vy:-Math.sin(p.angle)*160 - Math.random()*40,
+        life:0.3, max:0.3, size:2.5+Math.random()*2.5,
+        color: Math.random()<0.5 ? '#ff9d2e' : '#ffd23d' });
+    }
+  }
 
   // distance / score
   distance = Math.max(distance, (p.x - startX) / 40);
@@ -687,6 +810,13 @@ function update(dt){
   spawnDiamondsAhead();
   for (const d of diamonds){
     if (d.got) continue;
+    if (POWER.magnet > 0){
+      const ddx = p.x - d.x, ddy = p.y - d.y;
+      if (ddx*ddx + ddy*ddy < 170*170){
+        d.x += ddx * Math.min(1, 8*dt);
+        d.y += ddy * Math.min(1, 8*dt);
+      }
+    }
     if (Math.abs(d.x - p.x) < 30 && Math.abs(d.y - p.y) < 36){
       d.got = true; gems++; Sound.gem();
       addFloater('+1', d.x, d.y - 10, '#bfe9ff');
@@ -694,6 +824,23 @@ function update(dt){
         const a = Math.random()*Math.PI*2, s=60+Math.random()*140;
         particles.push({ x:d.x, y:d.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.5, max:0.5,
           size:2+Math.random()*2, color:'#ffffff' });
+      }
+    }
+  }
+
+  // special pickups
+  spawnPowerupsAhead();
+  for (const u of powerups){
+    if (u.got) continue;
+    if (Math.abs(u.x - p.x) < 34 && Math.abs(u.y - p.y) < 40){
+      u.got = true;
+      applyPower(u.type);
+      addFloater(POWER_LABEL[u.type], u.x, u.y - 16, POWER_STYLE[u.type].color);
+      Sound.power();
+      for (let i=0;i<16;i++){
+        const a = Math.random()*6.28, s = 60+Math.random()*160;
+        particles.push({ x:u.x, y:u.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.5, max:0.5,
+          size:2+Math.random()*2.5, color:POWER_STYLE[u.type].color });
       }
     }
   }
@@ -712,7 +859,14 @@ function update(dt){
   // HUD
   hudScore.textContent = Math.floor(distance);
   hudGems.textContent = gems;
+  let ph = '';
+  if (POWER.turbo   > 0) ph += `<span style="color:#ffb14d">&#9889; ${Math.ceil(POWER.turbo)}s</span>`;
+  if (POWER.lowgrav > 0) ph += `<span style="color:#c89bff">&#127769; ${Math.ceil(POWER.lowgrav)}s</span>`;
+  if (POWER.magnet  > 0) ph += `<span style="color:#ff7fe3">&#129522; ${Math.ceil(POWER.magnet)}s</span>`;
+  if (POWER.shield)      ph += `<span style="color:#7ff0ff">&#128737;</span>`;
+  if (ph !== lastPowerHtml){ hudPowers.innerHTML = ph; lastPowerHtml = ph; }
 }
+let lastPowerHtml = '';
 
 function updateEffects(dt){
   for (let i=particles.length-1;i>=0;i--){
@@ -750,6 +904,7 @@ function draw(){
 
   drawTerrain();
   drawDiamonds();
+  drawPowerups();
   drawLastScore();
   drawParticles();
   if (state === State.PLAYING || (state===State.OVER)) {
@@ -802,43 +957,118 @@ function drawTerrain(){
   const startWX = camX - 40;
   const endWX = camX + W + 40;
 
-  // build the path once
-  ctx.beginPath();
-  let first = true;
+  // split the line into solid runs separated by gaps (chasms)
+  const runs = [];
+  let cur = null;
   for (let wx = startWX; wx <= endWX; wx += step){
-    const sx = wx - camX;
-    const sy = terrainY(wx) - camY;
-    if (first){ ctx.moveTo(sx, sy); first = false; }
-    else ctx.lineTo(sx, sy);
+    if (inGap(wx)){ cur = null; continue; }
+    if (!cur){ cur = []; runs.push(cur); }
+    cur.push(wx);
   }
 
-  // glow (wide, soft)
-  ctx.save();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.shadowBlur = 26; ctx.shadowColor = palette.line;
-  ctx.strokeStyle = palette.line2; ctx.lineWidth = 12; ctx.globalAlpha = 0.55;
-  ctx.stroke();
-  // bright core
-  ctx.shadowBlur = 18; ctx.shadowColor = palette.line;
-  ctx.strokeStyle = palette.line; ctx.lineWidth = 5; ctx.globalAlpha = 1;
-  ctx.stroke();
-  // white hot centre
-  ctx.shadowBlur = 6;
-  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.6; ctx.globalAlpha = 0.7;
-  ctx.stroke();
-  ctx.restore();
-
-  // soft fill under the line
-  ctx.save();
-  ctx.lineTo(endWX - camX, H);
-  ctx.lineTo(startWX - camX, H);
-  ctx.closePath();
   const fg = ctx.createLinearGradient(0, H*0.4, 0, H);
   fg.addColorStop(0, hexA(palette.line, 0.14));
   fg.addColorStop(1, hexA(palette.line, 0.0));
-  ctx.fillStyle = fg;
-  ctx.fill();
-  ctx.restore();
+
+  for (const run of runs){
+    if (run.length < 2) continue;
+    ctx.beginPath();
+    for (let i = 0; i < run.length; i++){
+      const sx = run[i] - camX, sy = terrainY(run[i]) - camY;
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    // glow (wide, soft)
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.shadowBlur = 26; ctx.shadowColor = palette.line;
+    ctx.strokeStyle = palette.line2; ctx.lineWidth = 12; ctx.globalAlpha = 0.55;
+    ctx.stroke();
+    // bright core
+    ctx.shadowBlur = 18; ctx.shadowColor = palette.line;
+    ctx.strokeStyle = palette.line; ctx.lineWidth = 5; ctx.globalAlpha = 1;
+    ctx.stroke();
+    // white hot centre
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.6; ctx.globalAlpha = 0.7;
+    ctx.stroke();
+    ctx.restore();
+
+    // soft fill under this run
+    ctx.save();
+    ctx.lineTo(run[run.length-1] - camX, H);
+    ctx.lineTo(run[0] - camX, H);
+    ctx.closePath();
+    ctx.fillStyle = fg;
+    ctx.fill();
+    ctx.restore();
+
+    // bright end-caps where the line breaks off into a chasm
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 14; ctx.shadowColor = palette.line;
+    if (run[0] > startWX + step){
+      ctx.beginPath(); ctx.arc(run[0]-camX, terrainY(run[0])-camY, 3.4, 0, 6.283); ctx.fill();
+    }
+    if (run[run.length-1] < endWX - step){
+      const wx = run[run.length-1];
+      ctx.beginPath(); ctx.arc(wx-camX, terrainY(wx)-camY, 3.4, 0, 6.283); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawPowerups(){
+  const t = performance.now()/1000;
+  for (const u of powerups){
+    if (u.got) continue;
+    const sx = u.x - camX, sy = u.y - camY + Math.sin(t*2 + u.ph)*4;
+    if (sx < -40 || sx > W+40) continue;
+    const cfg = POWER_STYLE[u.type];
+    ctx.save();
+    ctx.translate(sx, sy);
+    // glowing orb
+    ctx.shadowBlur = 18; ctx.shadowColor = cfg.color;
+    ctx.fillStyle = hexA(cfg.color, 0.25);
+    ctx.beginPath(); ctx.arc(0, 0, 14, 0, 6.283); ctx.fill();
+    ctx.fillStyle = cfg.color;
+    ctx.beginPath(); ctx.arc(0, 0, 10, 0, 6.283); ctx.fill();
+    // rotating dashed ring
+    ctx.save();
+    ctx.rotate(t*1.5 + u.ph);
+    ctx.strokeStyle = cfg.color; ctx.lineWidth = 2; ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.arc(0, 0, 17, 0, 6.283); ctx.stroke();
+    ctx.restore();
+    // icon
+    ctx.shadowBlur = 0; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#ffffff';
+    drawPowerIcon(u.type, cfg.color);
+    ctx.restore();
+  }
+}
+
+function drawPowerIcon(type, color){
+  ctx.beginPath();
+  if (type === 'turbo'){
+    ctx.moveTo(-1.5,-7); ctx.lineTo(3.5,-1.5); ctx.lineTo(0.5,-1.5); ctx.lineTo(2,6.5);
+    ctx.lineTo(-3.5,0.5); ctx.lineTo(-0.5,0.5); ctx.closePath(); ctx.fill();
+  } else if (type === 'shield'){
+    ctx.moveTo(0,-7);
+    ctx.bezierCurveTo(4.5,-5.5, 5.5,-5, 5.5,-1.5);
+    ctx.bezierCurveTo(5.5,3, 2.5,5.8, 0,7);
+    ctx.bezierCurveTo(-2.5,5.8, -5.5,3, -5.5,-1.5);
+    ctx.bezierCurveTo(-5.5,-5, -4.5,-5.5, 0,-7);
+    ctx.closePath(); ctx.fill();
+  } else if (type === 'magnet'){
+    ctx.lineWidth = 3.2; ctx.lineCap = 'butt';
+    ctx.arc(0,-0.5,4.6,Math.PI,0,false);
+    ctx.moveTo(-4.6,-0.5); ctx.lineTo(-4.6,4.5);
+    ctx.moveTo(4.6,-0.5);  ctx.lineTo(4.6,4.5);
+    ctx.stroke();
+    ctx.fillRect(-6.2,4.5,3.2,2.6); ctx.fillRect(3,4.5,3.2,2.6);
+  } else { // lowgrav — crescent moon
+    ctx.arc(0,0,6,0,6.283); ctx.fill();
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(2.6,-1.6,4.8,0,6.283); ctx.fill();
+  }
 }
 
 function drawDiamonds(){
@@ -889,6 +1119,15 @@ function drawVehicle(){
   const sx = p.x - camX, sy = p.y - camY;
   ctx.save();
   ctx.translate(sx, sy);
+  // shield bubble / post-save blink
+  if (POWER.shield || POWER.invuln > 0){
+    ctx.save();
+    ctx.globalAlpha = POWER.shield ? 0.55 : 0.2 + 0.35*Math.abs(Math.sin(performance.now()/90));
+    ctx.strokeStyle = '#7ff0ff'; ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 16; ctx.shadowColor = '#35e0ff';
+    ctx.beginPath(); ctx.arc(0, 0, 26, 0, 6.283); ctx.stroke();
+    ctx.restore();
+  }
   ctx.rotate(p.angle);
   ctx.shadowBlur = 20; ctx.shadowColor = palette.veh;
 
@@ -967,6 +1206,7 @@ const overScreen = document.getElementById('overScreen');
 const hudScore = document.getElementById('hudScore');
 const hudGems = document.getElementById('hudGems');
 const hudTitle = document.getElementById('hudTitle');
+const hudPowers = document.getElementById('hudPowers');
 const menuStats = document.getElementById('menuStats');
 const overStats = document.getElementById('overStats');
 
