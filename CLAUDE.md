@@ -5,7 +5,15 @@
 
 Za każdym razem, gdy powstaje nowa wersja gry:
 1. Zmiany trafiają na gałąź `main`.
-2. Wersja zostaje automatycznie opublikowana na GitHub Pages
-   (workflow `.github/workflows/pages.yml` uruchamia się przy każdym pushu na `main`).
+2. Wersja zostaje automatycznie opublikowana na GitHub Pages.
 
-Gra to pojedynczy plik `index.html` w katalogu głównym — to on jest publikowany.
+## Publikacja (GitHub Pages)
+GitHub Pages jest ustawione w trybie **„Deploy from a branch"**:
+- **Source:** Deploy from a branch
+- **Branch:** `main` / katalog `/ (root)`
+
+Dzięki temu każdy push na `main` publikuje się sam — GitHub przebudowuje stronę
+automatycznie, bez żadnego workflow. Plik `.nojekyll` wyłącza przetwarzanie Jekyll.
+
+Gra to pojedynczy plik `index.html` w katalogu głównym — to on jest publikowany pod adresem
+`https://lolekst1.github.io/Neon-rider/`.
