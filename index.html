@@ -187,7 +187,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.0';   // bump on every released version
+const VERSION = '1.1';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -350,7 +350,9 @@ const ACCEL = 620;           // forward accel while the button is held (on the g
 const FRICTION = 560;        // deceleration with no input — the bike coasts to a full stop
 const MAX_SPEED = 620;       // top speed
 const SPIN_RATE = 5.2;       // rad/s while holding in air (backflip speed)
-const LAND_TOLERANCE = 0.9;  // radians (~51°) allowed mismatch on landing
+// Landing only fails when the bike is past ~90° from the slope — i.e. it comes
+// down on its roof / the rider instead of the wheels. Anything wheels-first is safe.
+const LAND_TOLERANCE = 1.5;  // radians (~86°)
 
 /* ---------------------------------------------------------------- helpers */
 function normAngle(a){ while(a > Math.PI) a -= Math.PI*2; while(a < -Math.PI) a += Math.PI*2; return a; }
