@@ -333,10 +333,9 @@ const PRAISE = ['smooth!','great!','aced!','WOW!'];
 
 // physics constants
 const GRAVITY = 1750;
-const BASE_SPEED = 300;      // minimum forward speed
-const ENGINE = 260;          // passive forward accel toward cruise
-const CRUISE = 430;
-const BOOST = 560;           // extra accel while holding on ground
+const ACCEL = 620;           // forward accel while the button is held (on the ground)
+const FRICTION = 560;        // deceleration with no input — the bike coasts to a full stop
+const MAX_SPEED = 620;       // top speed
 const SPIN_RATE = 6.2;       // rad/s while holding in air
 const LAND_TOLERANCE = 0.72; // radians (~41°) allowed mismatch on landing
 
@@ -395,7 +394,7 @@ function startGame(){
   startX = 400;
   player.x = startX;
   player.y = terrainY(startX) - player.size;
-  player.vx = CRUISE; player.vy = 0;
+  player.vx = 0; player.vy = 0;
   player.angle = terrainSlope(startX);
   player.grounded = true; player.spin = 0; player.airTime = 0;
   camX = player.x - W*0.32;
@@ -486,39 +485,34 @@ function update(dt){
 
   const p = player;
 
-  // Forward engine: ease toward cruise, boost while holding on the ground.
-  const targetV = holding && p.grounded ? BOOST : CRUISE;
   if (p.grounded){
-    // accelerate along current speed
+    // Ground drive is entirely player-driven: the bike accelerates only while
+    // the button is held, and brakes to a full stop when released. It never
+    // moves on its own.
     let speed = Math.hypot(p.vx, p.vy);
-    speed += (targetV - speed) * Math.min(1, (holding?4:2)*dt);
-    // re-express along slope tangent direction (forward = +x)
-    const a = p.angle;
-    p.vx = Math.cos(a) * speed;
-    p.vy = Math.sin(a) * speed;
-    // gravity pulls speed down/up along slope (downhill gains, uphill loses)
-    // handled implicitly through the ground constraint below
-  }
-
-  // gravity
-  p.vy += GRAVITY * dt;
-
-  // holding in the air => spin the bike
-  if (!p.grounded){
+    if (holding){
+      // hold to accelerate; a downhill adds extra push, an uphill never stalls
+      speed += (ACCEL + Math.max(0, GRAVITY * Math.sin(p.angle)) * 0.5) * dt;
+    } else {
+      speed -= FRICTION * dt;
+    }
+    if (speed < 0) speed = 0;
+    if (speed > MAX_SPEED) speed = MAX_SPEED;
+    p.vx = Math.cos(p.angle) * speed;
+    p.vy = Math.sin(p.angle) * speed;
+  } else {
+    // Airborne: gravity plus button-driven flips.
+    p.vy += GRAVITY * dt;
     p.airTime += dt;
     if (holding){
-      const dir = p.vx >= 0 ? 1 : 1;
-      p.angle += SPIN_RATE * dt * dir;
-      p.spin  += SPIN_RATE * dt * dir;
+      p.angle += SPIN_RATE * dt;
+      p.spin  += SPIN_RATE * dt;
     }
   }
 
   // integrate
   p.x += p.vx * dt;
   p.y += p.vy * dt;
-
-  // enforce a minimum forward pace so the player never stalls
-  if (p.vx < BASE_SPEED) p.vx += ENGINE * dt;
 
   // ground interaction
   const gy = terrainY(p.x);
@@ -555,14 +549,15 @@ function update(dt){
       }
       p.spin = 0; p.airTime = 0;
     }
-    // stick to the ground, align to slope, preserve tangential speed
+    // stick to the ground and align to the slope. Keep only the speed along
+    // the slope (project out the into-surface component) so a landing preserves
+    // forward momentum without a vertical kick. Drive/friction apply next frame.
     p.y = groundTop;
     p.grounded = true;
     p.angle = slope;
-    let speed = Math.hypot(p.vx, p.vy);
-    // gravity component along the slope (downhill speeds up)
-    speed += GRAVITY * Math.sin(slope) * dt * 0.55;
-    if (speed < BASE_SPEED) speed = BASE_SPEED;
+    let speed = p.vx * Math.cos(slope) + p.vy * Math.sin(slope);
+    if (speed < 0) speed = 0;
+    if (speed > MAX_SPEED) speed = MAX_SPEED;
     p.vx = Math.cos(slope) * speed;
     p.vy = Math.sin(slope) * speed;
   } else {
@@ -570,8 +565,8 @@ function update(dt){
     if (p.grounded){ p.grounded = false; p.airTime = 0; p.spin = 0; Sound.jump(); }
   }
 
-  // engine trail while grounded
-  if (p.grounded && Math.random() < 0.6){
+  // engine trail while riding (only when actually moving)
+  if (p.grounded && Math.hypot(p.vx, p.vy) > 80 && Math.random() < 0.6){
     particles.push({ x:p.x - Math.cos(p.angle)*p.size, y:p.y - Math.sin(p.angle)*p.size + 4,
       vx:-40+Math.random()*20, vy:-20-Math.random()*30, life:0.35, max:0.35,
       size:2+Math.random()*2, color:palette.line });

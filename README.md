@@ -10,8 +10,9 @@ Open `index.html` in any modern browser. No build step, no dependencies.
 
 ## Controls (one button)
 
-- **Hold** `Space` / **click** / **tap** &nbsp;→&nbsp; accelerate & press into the track on the
-  ground; **flip** while airborne.
+- **Hold** `Space` / **click** / **tap** &nbsp;→&nbsp; accelerate on the ground; **flip** while
+  airborne. The bike moves **only** while you hold — release and it coasts to a stop. It never
+  drives on its own.
 - Land on your wheels, roughly matching the slope, to keep going and earn style points.
   Land upside-down or at a bad angle and the bike explodes.
 
