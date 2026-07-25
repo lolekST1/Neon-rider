@@ -17,3 +17,8 @@ automatycznie, bez żadnego workflow. Plik `.nojekyll` wyłącza przetwarzanie J
 
 Gra to pojedynczy plik `index.html` w katalogu głównym — to on jest publikowany pod adresem
 `https://lolekst1.github.io/Neon-rider/`.
+
+## Numer wersji
+Przy każdej nowej wersji zwiększ stałą `VERSION` w `index.html`. Jest ona wyświetlana
+w prawym dolnym rogu ekranu (`v<VERSION>`) — dzięki temu od razu widać, która wersja
+jest opublikowana (pomaga potwierdzić, że cache się odświeżył).
