@@ -124,6 +124,23 @@
     box-shadow: 0 0 26px var(--neon); }
   .btn.primary:hover { background: #c76dff; }
 
+  .missions { margin-top: 18px; font-size: 13px; color: #c9b4f0;
+    line-height: 1.9; letter-spacing: .4px; }
+  .missions b { color: #fff; letter-spacing: 2px; }
+  .missions .mdone { color: #5cff8f; }
+
+  .skin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    margin-top: 8px; }
+  .skin { cursor: pointer; padding: 12px 8px 9px; border-radius: 12px;
+    border: 2px solid rgba(255,255,255,.16); background: rgba(255,255,255,.05);
+    transition: transform .08s ease, border-color .15s ease; }
+  .skin:hover { transform: scale(1.04); }
+  .skin.active { border-color: #fff; box-shadow: 0 0 14px rgba(255,255,255,.35); }
+  .skin .sw { width: 34px; height: 34px; border-radius: 50%; margin: 0 auto 7px;
+    box-shadow: 0 0 12px rgba(255,255,255,.25); }
+  .skin .nm { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: #fff; }
+  .skin .pr { font-size: 11px; color: #b79be6; margin-top: 2px; }
+
   .loader { display: flex; gap: 14px; margin-top: 26px; justify-content: center; }
   .loader i { width: 14px; height: 14px; border-radius: 50%; background: #cdb6ff;
     animation: pulse 1s infinite ease-in-out; }
@@ -169,8 +186,23 @@
       <div class="stats" id="menuStats">best distance <b>0</b> &nbsp;·&nbsp; gems <b>0</b></div>
       <div class="btn-row">
         <button class="btn primary" id="btnPlay">PLAY</button>
+        <button class="btn" id="btnGarage">GARAGE</button>
       </div>
+      <div class="missions" id="menuMissions"></div>
       <div class="hint">HOLD&nbsp; SPACE&nbsp;/&nbsp;CLICK&nbsp;/&nbsp;TAP&nbsp;&nbsp;to accelerate &amp; flip</div>
+    </div>
+  </div>
+
+  <!-- Garage / skin shop -->
+  <div class="screen hidden" id="garageScreen">
+    <div class="panel">
+      <div class="big" style="font-size:clamp(30px,6vw,52px)">garage</div>
+      <div class="sub">SPEND DIAMONDS ON BIKE SKINS</div>
+      <div class="stats">wallet <b id="garageWallet">0</b> &#9670;</div>
+      <div class="skin-grid" id="skinGrid"></div>
+      <div class="btn-row" style="margin-top:24px">
+        <button class="btn" id="btnGarageBack">BACK</button>
+      </div>
     </div>
   </div>
 
@@ -194,7 +226,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.6';   // bump on every released version
+const VERSION = '1.7';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -402,6 +434,65 @@ let floaters = [];      // floating praise text
 let lastScoreX = null;  // world x where the player crashed last run
 let bestDistance = Number(localStorage.getItem('slider_best') || 0);
 let bestGems = Number(localStorage.getItem('slider_gems') || 0);
+let wallet = Number(localStorage.getItem('slider_wallet') || 0);   // spendable diamonds
+
+// ghost of the best run: positions sampled every 60ms, raced in real time
+let ghost = null;
+try { ghost = JSON.parse(localStorage.getItem('slider_ghost') || 'null'); } catch(e){}
+let runSamples = [], sampleAcc = 0, ghostT = 0;
+
+// bike skins bought with diamonds
+const SKINS = [
+  { id:'neon',  name:'NEON',  color:null,      price:0 },
+  { id:'pink',  name:'PINK',  color:'#ff4fa3', price:60 },
+  { id:'green', name:'VENOM', color:'#5cff8f', price:120 },
+  { id:'blue',  name:'ICE',   color:'#4fc3ff', price:180 },
+  { id:'white', name:'GHOST', color:'#ffffff', price:250 },
+  { id:'gold',  name:'GOLD',  color:'#ffd23d', price:400 },
+];
+let ownedSkins = ['neon'];
+try { ownedSkins = JSON.parse(localStorage.getItem('slider_skins') || '["neon"]'); } catch(e){}
+let activeSkin = localStorage.getItem('slider_skin') || 'neon';
+function skinColor(){ const s = SKINS.find(s => s.id === activeSkin); return s ? s.color : null; }
+
+// daily missions: 3 picked deterministically from the date, reward 15 diamonds
+const MISSION_POOL = [
+  { id:'gems',  target:30,  label:'collect 30 diamonds' },
+  { id:'flips', target:3,   label:'land 3 flips' },
+  { id:'hoops', target:5,   label:'fly through 5 hoops' },
+  { id:'score', target:300, label:'score 300 in one run' },
+  { id:'airs',  target:8,   label:'8 big airs (0.5s+)' },
+  { id:'power', target:4,   label:'grab 4 power-ups' },
+];
+function dayKey(){ const d = new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
+function todaysMissions(){
+  const k = dayKey(); let h = 0;
+  for (const ch of k) h = (h*31 + ch.charCodeAt(0)) % 1000000;
+  const idx = []; let j = h % 6;
+  while (idx.length < 3){ if (!idx.includes(j % 6)) idx.push(j % 6); j++; }
+  return idx.map(i => MISSION_POOL[i]);
+}
+function loadMissions(){
+  let m = null;
+  try { m = JSON.parse(localStorage.getItem('slider_missions') || 'null'); } catch(e){}
+  if (!m || m.day !== dayKey()) m = { day: dayKey(), prog:{}, done:{} };
+  return m;
+}
+let missionState = loadMissions();
+function missionProg(id, n, mode){
+  if (missionState.day !== dayKey()) missionState = loadMissions();
+  const def = todaysMissions().find(t => t.id === id);
+  if (!def || missionState.done[id]) return;
+  const cur = missionState.prog[id] || 0;
+  missionState.prog[id] = mode === 'max' ? Math.max(cur, n) : cur + n;
+  if (missionState.prog[id] >= def.target){
+    missionState.done[id] = true;
+    wallet += 15; localStorage.setItem('slider_wallet', wallet);
+    addFloater('MISSION! +15', player.x, player.y - 70, '#ffd23d');
+    Sound.power();
+  }
+  try { localStorage.setItem('slider_missions', JSON.stringify(missionState)); } catch(e){}
+}
 
 const PRAISE = ['smooth!','great!','aced!','WOW!'];
 
@@ -448,6 +539,8 @@ function landedFeedback(slope){
     addFloater(combo > 1 ? praise + ' x' + combo : praise, p.x, p.y - 40, '#ffffff');
     addCombo();
   }
+  if (flips > 0) missionProg('flips', flips);
+  if (p.airTime > 0.5) missionProg('airs', 1);
   Sound.land();
   for (let i=0;i<10;i++){
     const a = slope + Math.PI + (Math.random()-0.5);
@@ -604,6 +697,7 @@ function startGame(){
   hoops = []; nextHoopX = startX + 2200;
   obstacles = []; nextObsX = startX + 2600;
   curZoneKey = null;
+  runSamples = []; sampleAcc = 0; ghostT = 0;
   spawnDiamondsAhead();
   spawnPowerupsAhead();
   spawnHoopsAhead();
@@ -613,6 +707,7 @@ function startGame(){
   loadScreen.classList.add('hidden');
   menuScreen.classList.add('hidden');
   overScreen.classList.add('hidden');
+  garageScreen.classList.add('hidden');
   applyPalette(palette);
 }
 
@@ -620,13 +715,21 @@ function gameOver(){
   state = State.OVER;
   lastScoreX = player.x;
   Sound.crash();
-  explode(player.x, player.y, palette.veh);
+  explode(player.x, player.y, skinColor() || palette.veh);
   // shake
   shake = 18;
   const d = Math.floor(distance);
   if (d > bestDistance){ bestDistance = d; localStorage.setItem('slider_best', d); }
   if (gems > bestGems){ bestGems = gems; localStorage.setItem('slider_gems', gems); }
-  overStats.innerHTML = `distance <b>${d}</b> &nbsp;·&nbsp; gems <b>${gems}</b><br>` +
+  wallet += gems;
+  localStorage.setItem('slider_wallet', wallet);
+  missionProg('score', d, 'max');
+  // keep the best run as the ghost
+  if (d >= ((ghost && ghost.d) || 20) && runSamples.length > 6){
+    ghost = { d, s: runSamples.slice() };
+    try { localStorage.setItem('slider_ghost', JSON.stringify(ghost)); } catch(e){}
+  }
+  overStats.innerHTML = `distance <b>${d}</b> &nbsp;·&nbsp; gems <b>+${gems}</b> &nbsp;·&nbsp; wallet <b>${wallet}</b><br>` +
                         `best <b>${bestDistance}</b>`;
   // brief delay so the explosion is visible before the modal
   setTimeout(()=>{ if (state===State.OVER) overScreen.classList.remove('hidden'); }, 650);
@@ -638,9 +741,31 @@ function toMenu(){
   hud.classList.add('hidden');
   overScreen.classList.add('hidden');
   loadScreen.classList.add('hidden');
+  garageScreen.classList.add('hidden');
   menuScreen.classList.remove('hidden');
-  menuStats.innerHTML = `best distance <b>${bestDistance}</b> &nbsp;·&nbsp; gems <b>${bestGems}</b>`;
+  menuStats.innerHTML = `best distance <b>${bestDistance}</b> &nbsp;·&nbsp; wallet <b>${wallet}</b> &#9670;`;
+  const todays = todaysMissions();
+  menuMissions.innerHTML = '<b>DAILY MISSIONS</b><br>' + todays.map(m => {
+    const done = missionState.done[m.id];
+    const pr = Math.min(missionState.prog[m.id] || 0, m.target);
+    return done ? `<span class="mdone">&#10003; ${m.label}</span>`
+                : `<span>${pr}/${m.target} — ${m.label}</span>`;
+  }).join('<br>');
   applyPalette(PALETTES[0]);
+}
+
+function renderGarage(){
+  garageWallet.textContent = wallet;
+  skinGrid.innerHTML = SKINS.map(s => {
+    const owned = ownedSkins.includes(s.id);
+    const act = s.id === activeSkin;
+    const sw = s.color || 'linear-gradient(135deg,#ffd400,#ff5cf0,#25e6ff)';
+    return `<div class="skin ${act?'active':''}" data-id="${s.id}">
+      <div class="sw" style="background:${sw}"></div>
+      <div class="nm">${s.name}</div>
+      <div class="pr">${act ? 'ACTIVE' : owned ? 'OWNED' : s.price + ' &#9670;'}</div>
+    </div>`;
+  }).join('');
 }
 
 function applyPalette(p){
@@ -677,6 +802,28 @@ document.getElementById('btnPlay').addEventListener('click', startGame);
 document.getElementById('btnAgain').addEventListener('click', startGame);
 document.getElementById('btnBack').addEventListener('click', toMenu);
 document.getElementById('btnMenu').addEventListener('click', toMenu);
+document.getElementById('btnGarage').addEventListener('click', ()=>{
+  menuScreen.classList.add('hidden');
+  garageScreen.classList.remove('hidden');
+  renderGarage();
+});
+document.getElementById('btnGarageBack').addEventListener('click', toMenu);
+document.getElementById('skinGrid').addEventListener('click', (e)=>{
+  const el = e.target.closest('.skin');
+  if (!el) return;
+  const s = SKINS.find(k => k.id === el.dataset.id);
+  if (!ownedSkins.includes(s.id)){
+    if (wallet < s.price) return;             // can't afford it yet
+    wallet -= s.price;
+    localStorage.setItem('slider_wallet', wallet);
+    ownedSkins.push(s.id);
+    localStorage.setItem('slider_skins', JSON.stringify(ownedSkins));
+    Sound.resume(); Sound.power();
+  }
+  activeSkin = s.id;
+  localStorage.setItem('slider_skin', activeSkin);
+  renderGarage();
+});
 
 // Reveal menu after a short "boot" sequence.
 setTimeout(toMenu, 1400);
@@ -883,6 +1030,13 @@ function update(dt){
   // distance / score
   distance = Math.max(distance, (p.x - startX) / 40);
 
+  // ghost recording + playback clock
+  ghostT += dt; sampleAcc += dt;
+  if (sampleAcc >= 0.06 && runSamples.length < 9000){
+    sampleAcc -= 0.06;
+    runSamples.push(p.x, p.y, p.angle);
+  }
+
   // level / palette by distance
   const np = paletteForDistance(distance);
   if (np !== palette){ palette = np; applyPalette(palette); }
@@ -900,6 +1054,7 @@ function update(dt){
     }
     if (Math.abs(d.x - p.x) < 30 && Math.abs(d.y - p.y) < 36){
       d.got = true; gems++; Sound.gem();
+      missionProg('gems', 1);
       addFloater('+1', d.x, d.y - 10, '#bfe9ff');
       for (let i=0;i<12;i++){
         const a = Math.random()*Math.PI*2, s=60+Math.random()*140;
@@ -916,6 +1071,7 @@ function update(dt){
     if (Math.abs(u.x - p.x) < 34 && Math.abs(u.y - p.y) < 40){
       u.got = true;
       applyPower(u.type);
+      missionProg('power', 1);
       addFloater(POWER_LABEL[u.type], u.x, u.y - 16, POWER_STYLE[u.type].color);
       Sound.power();
       for (let i=0;i<16;i++){
@@ -936,6 +1092,7 @@ function update(dt){
       distance += pts;
       addFloater('HOOP! +' + pts, hp.x, hp.y - 44, '#ffd23d');
       addCombo();
+      missionProg('hoops', 1);
       Sound.power();
       for (let i=0;i<14;i++){
         const a = Math.random()*6.28, s = 60+Math.random()*180;
@@ -1028,6 +1185,7 @@ function draw(){
   drawHoops();
   drawLastScore();
   drawParticles();
+  drawGhost();
   if (state === State.PLAYING || (state===State.OVER)) {
     // hide the bike once it has exploded
     if (state === State.PLAYING) drawVehicle();
@@ -1298,8 +1456,31 @@ function drawLastScore(){
   ctx.restore();
 }
 
+function drawGhost(){
+  if (!ghost || !ghost.s || ghost.s.length < 6 || state !== State.PLAYING) return;
+  const n = ghost.s.length / 3;
+  const f = ghostT / 0.06;
+  if (f >= n - 1) return;               // the ghost's run is over
+  const i = Math.floor(f), t = f - i;
+  const gx = ghost.s[i*3]   * (1-t) + ghost.s[i*3+3] * t;
+  const gy = ghost.s[i*3+1] * (1-t) + ghost.s[i*3+4] * t;
+  const ga = ghost.s[i*3+2] * (1-t) + ghost.s[i*3+5] * t;
+  const sx = gx - camX, sy = gy - camY;
+  if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) return;
+  ctx.save();
+  ctx.translate(sx, sy); ctx.rotate(ga);
+  ctx.globalAlpha = 0.25;
+  ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 2;
+  for (const wx of [-11, 11]){ ctx.beginPath(); ctx.arc(wx, 8, 6.4, 0, 6.283); ctx.stroke(); }
+  ctx.beginPath();
+  ctx.moveTo(-15,6); ctx.lineTo(-9,-4); ctx.lineTo(6,-7); ctx.lineTo(15,0); ctx.lineTo(15,6);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
 function drawVehicle(){
   const p = player;
+  const vc = skinColor() || palette.veh;
   const sx = p.x - camX, sy = p.y - camY;
   ctx.save();
   ctx.translate(sx, sy);
@@ -1313,16 +1494,16 @@ function drawVehicle(){
     ctx.restore();
   }
   ctx.rotate(p.angle);
-  ctx.shadowBlur = 20; ctx.shadowColor = palette.veh;
+  ctx.shadowBlur = 20; ctx.shadowColor = vc;
 
   // wheels
   ctx.fillStyle = '#120a1e';
-  ctx.strokeStyle = palette.veh; ctx.lineWidth = 2.4;
+  ctx.strokeStyle = vc; ctx.lineWidth = 2.4;
   for (const wx of [-11, 11]){
     ctx.beginPath(); ctx.arc(wx, 8, 6.4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
   }
   // body
-  ctx.fillStyle = palette.veh;
+  ctx.fillStyle = vc;
   ctx.beginPath();
   ctx.moveTo(-15, 6);
   ctx.lineTo(-9, -4);
@@ -1393,6 +1574,10 @@ const hudTitle = document.getElementById('hudTitle');
 const hudPowers = document.getElementById('hudPowers');
 const menuStats = document.getElementById('menuStats');
 const overStats = document.getElementById('overStats');
+const menuMissions = document.getElementById('menuMissions');
+const garageScreen = document.getElementById('garageScreen');
+const garageWallet = document.getElementById('garageWallet');
+const skinGrid = document.getElementById('skinGrid');
 
 let last = performance.now();
 function frame(now){
