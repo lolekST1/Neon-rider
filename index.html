@@ -2,14 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>slider — neon rider</title>
+<meta name="description" content="A one-button neon motorcycle game: ride the glowing line, backflip over chasms and land on your wheels.">
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0a0420">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="slider">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
   :root { --neon: #b14bff; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%; overflow: hidden;
     background: #0a0420;
+    overscroll-behavior: none;
     font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
     touch-action: none; -webkit-tap-highlight-color: transparent;
     user-select: none; -webkit-user-select: none;
@@ -18,9 +32,12 @@
 
   /* ---------- HUD ---------- */
   .overlay { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  /* keep the HUD clear of notches / rounded corners when installed */
   .hud { position: fixed; top: 0; left: 0; right: 0; z-index: 12;
          display: flex; align-items: flex-start; justify-content: space-between;
-         padding: 18px 22px; pointer-events: none; }
+         padding: calc(18px + env(safe-area-inset-top)) calc(22px + env(safe-area-inset-right))
+                  18px calc(22px + env(safe-area-inset-left));
+         pointer-events: none; }
 
   .menu-btn {
     pointer-events: auto; cursor: pointer;
@@ -69,7 +86,9 @@
   }
 
   .version {
-    position: fixed; right: 12px; bottom: 9px; z-index: 15;
+    position: fixed; z-index: 15;
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(9px + env(safe-area-inset-bottom));
     font-family: "Courier New", monospace; font-size: 13px; font-weight: 700;
     letter-spacing: 1px; color: rgba(255,255,255,.55);
     text-shadow: 0 0 8px rgba(255,255,255,.4); pointer-events: none;
@@ -187,6 +206,7 @@
       <div class="btn-row">
         <button class="btn primary" id="btnPlay">PLAY</button>
         <button class="btn" id="btnGarage">GARAGE</button>
+        <button class="btn hidden" id="btnInstall">INSTALL</button>
       </div>
       <div class="missions" id="menuMissions"></div>
       <div class="hint">HOLD&nbsp; SPACE&nbsp;/&nbsp;CLICK&nbsp;/&nbsp;TAP&nbsp;&nbsp;to accelerate &amp; flip</div>
@@ -226,7 +246,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '1.9';   // bump on every released version
+const VERSION = '2.0';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -1759,6 +1779,34 @@ const menuMissions = document.getElementById('menuMissions');
 const garageScreen = document.getElementById('garageScreen');
 const garageWallet = document.getElementById('garageWallet');
 const skinGrid = document.getElementById('skinGrid');
+const btnInstall = document.getElementById('btnInstall');
+
+/* ---------------------------------------------------------------- PWA */
+// Offline support. Registered late so it never delays the first frame.
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}
+
+// "INSTALL" appears in the menu only when the browser offers installation
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  installPrompt = e;
+  btnInstall.classList.remove('hidden');
+});
+btnInstall.addEventListener('click', async ()=>{
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  btnInstall.classList.add('hidden');
+});
+window.addEventListener('appinstalled', ()=>{
+  installPrompt = null;
+  btnInstall.classList.add('hidden');
+});
 
 let last = performance.now();
 function frame(now){
