@@ -157,7 +157,48 @@ Dla dłuższych opisów: `git commit -F - <<'MSG' ... MSG`.
 ---
 
 # Pomysły na dalej (niezrealizowane)
-- Wyróżniki dla pozostałych płatnych skinów (ICE — mroźna poświata, VENOM — pulsujący
-  ślad), żeby każdy miał charakter niezależnie od palety poziomu.
-- Podwójne kolce / trudniejsze warianty przeszkód przy wyższych wynikach.
-- Tabela wyników, więcej typów stref, dźwiękowe warianty muzyki per poziom.
+
+## Największy zwrot, mały koszt (buduje na istniejących systemach, nie rusza fizyki)
+- **Tabela wyników** — lokalny top 5 w `localStorage` (dystans + data), obok kolumny
+  ducha rekordu. Bez backendu.
+- **Nazwane triki zamiast samego combo** — rozpoznawanie z już symulowanego stanu:
+  `double backflip`, `perfect landing` (kąt ~0 do zbocza w oknie `ALIGN_K`),
+  `no-hander` (długi lot bez throttle). Osobna premia + floater dla każdego.
+- **Cel dystansu na mapie** — cienka neonowa linia mety w miejscu poprzedniego rekordu;
+  wizualny cel mocno podbija retencję (kilka linii w `render`).
+
+## Mechaniki jazdy
+- **Nitro ładowane trikami** — pasek boostu zamiast losowego TURBO; drugi input
+  (tap górnej połowy ekranu) wystrzeliwuje. Lekka warstwa strategii, wciąż mobilne.
+- **Wheelie / balans na tylnym kole** — model dwóch kół już to umożliwia; utrzymanie
+  kąta wheelie X s podbija mnożnik combo.
+- **Warianty przeszkód** — podwójne/potrójne kolce z przesuniętym cyklem `obsExt`,
+  ruchome platformy nad przepaściami, wahadła/bujaki do wyminięcia timingiem,
+  wybuchowe beczki (odrzut zamiast śmierci — synergia z fizyką).
+
+## Kosmetyka i progresja
+- **Wyróżniki płatnych skinów** — ICE (mroźna poświata + zamarzające cząstki),
+  VENOM (pulsujący jadowity ślad), nowy tier HOLO (tęczowy gradient reagujący na
+  prędkość). Każdy z charakterem niezależnym od palety poziomu.
+- **Ślady/emitery jako osobna kategoria zakupów** (dym, iskry, tęcza) — mnoży wartość
+  diamentów bez rysowania nowych motorów.
+- **Motywy toru / „światy"** — cykl dzień-noc-zachód wg dystansu albo odblokowywalne
+  biomy (cyber-miasto, pustynia, kosmos ze stałą niską grawitacją).
+
+## Strefy i świat
+- **Więcej typów stref** — FOG (ograniczona widoczność), BOOST ZONE (pas
+  przyspieszający), REVERSE-G (krótka strefa odwróconej grawitacji, jazda po suficie).
+- **Dźwiękowe warianty muzyki per strefa/poziom** — dynamiczny filtr low-pass na Web
+  Audio w NIGHT/STORM, bez nowych plików.
+
+## Feel / retencja
+- **Haptyka** (`navigator.vibrate`) przy crashu, lądowaniu, zebraniu power-upa —
+  duży zysk „soczystości" na mobile.
+- **Misje tygodniowe + seria dni (streak)** — licznik kolejnych dni gry z rosnącą
+  nagrodą, na bazie istniejących misji dziennych.
+- **Tryb „daily seed"** — jeden tor z ziarna dnia dla wszystkich; teren jest już
+  proceduralny z seeda, więc głównie zablokowanie `hash`.
+
+## Sugerowany zestaw na 2.3
+Nazwane triki + wyróżniki ICE/VENOM + tabela wyników — wszystkie budują na tym, co
+już jest, nie ruszają fizyki, a razem dają wyczuwalny skok głębi.
