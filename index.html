@@ -285,7 +285,7 @@
    Pure HTML5 Canvas + Web Audio API. No external libraries.
    ========================================================================= */
 
-const VERSION = '2.1';   // bump on every released version
+const VERSION = '2.2';   // bump on every released version
 document.getElementById('version').textContent = 'v' + VERSION;
 
 const canvas = document.getElementById('game');
@@ -502,18 +502,22 @@ try { ghost = JSON.parse(localStorage.getItem('slider_ghost') || 'null'); } catc
 let runSamples = [], sampleAcc = 0, ghostT = 0;
 
 // bike skins bought with diamonds
+// `metal` skins get a polished gradient body with a travelling highlight,
+// so the top-tier finish never reads as a flat colour swap
 const SKINS = [
-  { id:'neon',  name:'NEON',  color:null,      price:0 },
-  { id:'pink',  name:'PINK',  color:'#ff4fa3', price:60 },
+  { id:'neon',  name:'NEON',  color:null,      price:0   },
+  { id:'pink',  name:'PINK',  color:'#ff4fa3', price:60  },
   { id:'green', name:'VENOM', color:'#5cff8f', price:120 },
   { id:'blue',  name:'ICE',   color:'#4fc3ff', price:180 },
   { id:'white', name:'GHOST', color:'#ffffff', price:250 },
-  { id:'gold',  name:'GOLD',  color:'#ffd23d', price:400 },
+  { id:'gold',  name:'GOLD',  color:'#ffc61f', price:400,
+    metal:['#fffdf2','#ffd83f','#b9760a','#54320a'], edge:'#fff1b0', sparkle:'#ffe07a' },
 ];
 let ownedSkins = ['neon'];
 try { ownedSkins = JSON.parse(localStorage.getItem('slider_skins') || '["neon"]'); } catch(e){}
 let activeSkin = localStorage.getItem('slider_skin') || 'neon';
-function skinColor(){ const s = SKINS.find(s => s.id === activeSkin); return s ? s.color : null; }
+function skinDef(){ return SKINS.find(s => s.id === activeSkin) || SKINS[0]; }
+function skinColor(){ return skinDef().color; }
 
 // daily missions: 3 picked deterministically from the date, reward 15 diamonds
 const MISSION_POOL = [
@@ -830,7 +834,9 @@ function renderGarage(){
   skinGrid.innerHTML = SKINS.map(s => {
     const owned = ownedSkins.includes(s.id);
     const act = s.id === activeSkin;
-    const sw = s.color || 'linear-gradient(135deg,#ffd400,#ff5cf0,#25e6ff)';
+    const sw = s.metal
+      ? `linear-gradient(140deg, ${s.metal[2]} 0%, ${s.metal[1]} 28%, ${s.metal[0]} 46%, ${s.metal[1]} 66%, ${s.metal[3]} 100%)`
+      : s.color || 'linear-gradient(135deg,#ffd400,#ff5cf0,#25e6ff)';
     return `<div class="skin ${act?'active':''}" data-id="${s.id}">
       <div class="sw" style="background:${sw}"></div>
       <div class="nm">${s.name}</div>
@@ -1087,6 +1093,15 @@ function update(dt){
     particles.push({ x:p.x - Math.cos(p.angle)*p.size, y:p.y - Math.sin(p.angle)*p.size + 4,
       vx:-40+Math.random()*20, vy:-20-Math.random()*30, life:0.35, max:0.35,
       size:2+Math.random()*2, color:palette.line });
+  }
+  // premium skins leave a glinting trail of their own
+  const sk = skinDef();
+  if (sk.sparkle && Math.hypot(p.vx, p.vy) > 120 && Math.random() < 0.5){
+    const a = p.angle + Math.PI + (Math.random()-0.5)*0.9;
+    particles.push({ x:p.x + (Math.random()-0.5)*14, y:p.y + (Math.random()-0.5)*10,
+      vx:Math.cos(a)*(40+Math.random()*70), vy:Math.sin(a)*40 - 30 - Math.random()*40,
+      life:0.55, max:0.55, size:1.4+Math.random()*2,
+      color: Math.random()<0.35 ? '#ffffff' : sk.sparkle });
   }
   // turbo exhaust flame
   if (POWER.turbo > 0 && p.grounded){
@@ -1598,6 +1613,23 @@ function drawVehicle(){
 
 // A sportbike in side view, facing right. Wheel positions match the physics
 // bodies exactly (WHEELS / WHEEL_R) so what you see is what collides.
+// Bodywork paint: a flat colour normally, or a polished metal gradient with a
+// highlight that drifts across the panels for `metal` skins.
+function bodyPaint(vc){
+  const s = skinDef();
+  if (!s.metal) return vc;
+  const g = ctx.createLinearGradient(0, -9.5, 0, 4.5);
+  const t = (Math.sin(performance.now() / 900) + 1) / 2;   // 0..1 drift
+  const hi = 0.26 + t * 0.16;
+  g.addColorStop(0, s.metal[2]);                              // shaded upper edge
+  g.addColorStop(Math.max(0.03, hi - 0.13), s.metal[1]);
+  g.addColorStop(hi, s.metal[0]);                             // travelling sheen
+  g.addColorStop(Math.min(0.62, hi + 0.13), s.metal[1]);
+  g.addColorStop(0.78, s.metal[2]);
+  g.addColorStop(1, s.metal[3]);                              // deep bronze underside
+  return g;
+}
+
 function drawBike(vc, spin){
   const dark = '#160c26', mid = '#2b1a44';
 
@@ -1639,7 +1671,7 @@ function drawBike(vc, spin){
   // --- main bodywork: long, low and wedge-shaped — tail kicked up at the
   // back, fairing dropping to a pointed nose ahead of the front axle
   ctx.shadowBlur = 18; ctx.shadowColor = vc;
-  ctx.fillStyle = vc;
+  ctx.fillStyle = bodyPaint(vc);
   ctx.beginPath();
   ctx.moveTo(-14.6, -7.4);          // tail tip
   ctx.lineTo(-11.4, -8.6);          // tail top edge
@@ -1654,6 +1686,13 @@ function drawBike(vc, spin){
   ctx.lineTo(-12.6, -4.4);          // tail unit rear face
   ctx.closePath();
   ctx.fill();
+  // polished edge on metal finishes
+  const sk = skinDef();
+  if (sk.edge){
+    ctx.strokeStyle = sk.edge; ctx.lineWidth = 0.9; ctx.globalAlpha = 0.85;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 
   // darker vent panel along the fairing flank
   ctx.shadowBlur = 0;
